@@ -52,4 +52,4 @@ else
 fi
 
 pkill -f "mpv*.--profile=wallpaper" || true
-mpv --no-config --include=$MPVCONF--profile=hdr "$OUTPUT_WALLPAPER"
+mpv --no-config --include=$MPVCONF --profile=hdr "$OUTPUT_WALLPAPER"
