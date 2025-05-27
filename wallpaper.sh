@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
-# strict mode
 set -euo pipefail
 
-FILE_OR_DIRECTORY=${1:-"$HOME/Pictures/"}
+cd $(dirname "$0")
+MPVCONF="$(pwd)/mpv.conf"
+FILE_OR_DIRECTORY=${1:-"$HOME/Pictures"}
 
 function throw {
 	local error_message="$1"
@@ -16,6 +17,7 @@ function fromfile {
 	local media_file="$1"
 	if ! [[ $(file -ib "$media_file") =~ ^(image|video) ]]; then
 		throw "$media_file is not an image or video!"
+	fi
 	echo "$media_file"
 }
 
@@ -50,8 +52,4 @@ else
 fi
 
 pkill -f "mpv*.--profile=wallpaper" || true
-if [[ $(file -ib "$OUTPUT_WALLPAPER") == video* ]]; then
-	mpv --profile=wallpaper --loop=inf --mute=yes "$OUTPUT_WALLPAPER"
-	exit 0
-fi
-mpv --profile=wallpaper --pause=yes "$OUTPUT_WALLPAPER"
+mpv --no-config --include=$MPVCONF--profile=hdr "$OUTPUT_WALLPAPER"
