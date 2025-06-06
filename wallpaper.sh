@@ -2,14 +2,7 @@
 set -euo pipefail
 cd $(dirname "$0")
 
-# ARGUMENTS=$(getopt -o chq -l cycle,help,quit -- "$@")
-# echo "|$ARGUMENTS|"
-# FLAGS=1
-# grep -oP "^[^']*?(?= --($| '))" "$ARGUMENTS" > "$FLAGS"
-# echo "$FLAGS"
-# exit 1
-
-FILE_OR_DIRECTORY=${1:-"$HOME/Pictures/PIKMINGARDEN"}
+FILE_OR_DIRECTORY=${1:-"$HOME/Videos"}
 
 function throw {
 	local error_message="$1"
@@ -55,10 +48,10 @@ elif [[ -d $FILE_OR_DIRECTORY ]]; then
 else
 	throw "$FILE_OR_DIRECTORY is not a file or directory!"
 fi
-
+echo "Playing \"$OUTPUT_WALLPAPER\""
 
 pkill -f "mpv*.--title=wallpaper-mpv" || true
 
 # note: mpv flag --no-config is very slow!
 # when later ignoring user config, --config-dir must replace --include instead
-mpv --title=wallpaper-mpv --include="$(pwd)/mpv.conf" --profile=hdr "$OUTPUT_WALLPAPER" &
+mpv --title=wallpaper-mpv --include="$(pwd)/mpv.conf" --profile=hdr "$OUTPUT_WALLPAPER"
