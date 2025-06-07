@@ -13,7 +13,7 @@ function throw {
 
 function fromfile {
 	local media_file="$1"
-	if ! [[ $(file -ib "$media_file") =~ ^(image|video) ]]; then
+	if ! [[ $(file -b --mime-type "$media_file") =~ ^(image|video) ]]; then
 		throw "$media_file is not an image or video!"
 	fi
 	echo "$media_file"
@@ -28,7 +28,9 @@ function fromdirectory {
 
 	# remove non media files
 	for fileindex in "${!wallpapers[@]}"; do
-		if [[ $(file -ib "${wallpapers[$fileindex]}") =~ ^(image|video) ]]; then continue; fi
+		if [[ $(file -b --mime-type "${wallpapers[$fileindex]}") =~ ^(image|video) ]];
+			then continue;
+		fi
 		unset "wallpapers[$fileindex]"
 	done
 	# remove empty array indices just made
@@ -48,10 +50,25 @@ elif [[ -d $FILE_OR_DIRECTORY ]]; then
 else
 	throw "$FILE_OR_DIRECTORY is not a file or directory!"
 fi
-echo "Playing \"$OUTPUT_WALLPAPER\""
 
-pkill -f "mpv*.--title=wallpaper-mpv" || true
+if pkill -f "mpv*.--title=wallpaper-mpv"; then
+	echo "Closed previous instance of this script"
+fi
 
-# note: mpv flag --no-config is very slow!
-# when later ignoring user config, --config-dir must replace --include instead
-mpv --title=wallpaper-mpv --include="$(pwd)/mpv.conf" --profile=hdr "$OUTPUT_WALLPAPER"
+# enum "image" or "video"
+filetype=$(file -b --mime-type $OUTPUT_WALLPAPER | cut -d / -f 1)
+
+# adjust when a video starts or ends based on its filename
+# ex: 10video20.mp4 will start 10 seconds into the video and end 20 seconds in
+filename=$(basename $OUTPUT_WALLPAPER)
+if starttime=$(grep -Po '^\d{1,6}' <<< "$filename"); then
+	starttime="--start=$starttime "
+fi
+if endtime=$(grep -Po '\d{1,6}(?=\.[^.]+$)' <<< "$filename");  then
+	endtime="--end=$endtime "
+fi
+
+echo "Playing file $OUTPUT_WALLPAPER"
+mpv --title=wallpaper-mpv --include="$(pwd)/mpv.conf" --profile=hdr $starttime$endtime"$OUTPUT_WALLPAPER"
+echo "mpv ended naturally without being terminated"
+# todo: make it loop forever between files or not as per command line options
