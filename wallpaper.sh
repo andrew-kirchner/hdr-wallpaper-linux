@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd $(dirname "$0")
-
+MPV_CONF="$(pwd)/mpv.conf"
 FILE_OR_DIRECTORY=${1:-"$HOME/Videos"}
 
 function throw {
@@ -11,43 +11,50 @@ function throw {
 	exit 1
 }
 
-function fromfile {
+function playsinglefile {
 	local media_file="$1"
 	if ! [[ $(file -b --mime-type "$media_file") =~ ^(image|video) ]]; then
 		throw "$media_file is not an image or video!"
 	fi
-	echo "$media_file"
+	if pkill -f "mpv*.--title=wallpaper-mpv"; then
+		echo "Closed previous instance of this script for single file"
+	fi
+	#TODO: using loop and start/end parameters seems to not
+	# be supported for some reason
+	mpv --title=wallpaper-mpv --include="$MPV_CONF" --profile=hdr \
+		--loop=inf \
+		--image-display-duration=inf \
+		"$media_file"
 }
 
-function fromdirectory {
-	local media_directory="$1"
-	declare -a wallpapers
+function timempv {
+	local media_file="$1"
+	# enum "image" or "video"
+	local filetype=$(file -b --mime-type $media_file | cut -d / -f 1)
 
-	# array of all filenames, including emojis/spaces/newlines
-	mapfile -d '' wallpapers < <(find $media_directory -type f -print0)
-
-	# remove non media files
-	for fileindex in "${!wallpapers[@]}"; do
-		if [[ $(file -b --mime-type "${wallpapers[$fileindex]}") =~ ^(image|video) ]];
-			then continue;
-		fi
-		unset "wallpapers[$fileindex]"
-	done
-	# remove empty array indices just made
-	wallpapers=("${wallpapers[@]}")
-
-	if [[ ${#wallpapers[@]} -eq 0 ]]; then
-		throw "there are no images or videos in $media_directory!"
+	if [[ "$filetype"=="image" ]]; then
+		echo ""
 	fi
-	# return random wallpaper
-	echo "${wallpapers[$(shuf -i "0-$((${#wallpapers[@]}-1))" -n 1)]}"
+	# adjust when a video starts or ends based on its filename
+	# ex: 10video20.mp4 will start 10 seconds into the video and end 20 seconds in
+	local filename=$(basename $media_file)
+	local parameters=""
+	local start_time
+	local end_time
+	if start_time=$(grep -Po '^\d{1,6}' <<< "$filename"); then
+		parameters+="--start=$start_time "
+	fi
+	if end_time=$(grep -Po '\d{1,6}(?=\.[^.]+$)' <<< "$filename");  then
+		parameters+="--end=$end_time "
+	fi
+	echo "$parameters"
 }
 
 if [[ -f $FILE_OR_DIRECTORY ]]; then
-	OUTPUT_WALLPAPER=$(fromfile "$FILE_OR_DIRECTORY")
-elif [[ -d $FILE_OR_DIRECTORY ]]; then
-	OUTPUT_WALLPAPER=$(fromdirectory "$FILE_OR_DIRECTORY")
-else
+	playsinglefile $FILE_OR_DIRECTORY
+	exit 0
+fi
+if [[ ! -d $FILE_OR_DIRECTORY ]]; then
 	throw "$FILE_OR_DIRECTORY is not a file or directory!"
 fi
 
@@ -55,20 +62,30 @@ if pkill -f "mpv*.--title=wallpaper-mpv"; then
 	echo "Closed previous instance of this script"
 fi
 
-# enum "image" or "video"
-filetype=$(file -b --mime-type $OUTPUT_WALLPAPER | cut -d / -f 1)
 
-# adjust when a video starts or ends based on its filename
-# ex: 10video20.mp4 will start 10 seconds into the video and end 20 seconds in
-filename=$(basename $OUTPUT_WALLPAPER)
-if starttime=$(grep -Po '^\d{1,6}' <<< "$filename"); then
-	starttime="--start=$starttime "
-fi
-if endtime=$(grep -Po '\d{1,6}(?=\.[^.]+$)' <<< "$filename");  then
-	endtime="--end=$endtime "
-fi
+declare -a wallpapers
+# split by null byte to account for spaces/emojis/newlines
+mapfile -d '' wallpapers < <(find $FILE_OR_DIRECTORY -type f -print0)
+# remove non media files
+for fileindex in "${!wallpapers[@]}"; do
+	if [[ $(file -b --mime-type "${wallpapers[$fileindex]}") =~ ^(image|video) ]];
+		then continue;
+	fi
+	unset "wallpapers[$fileindex]"
+done
 
-echo "Playing file $OUTPUT_WALLPAPER"
-mpv --title=wallpaper-mpv --include="$(pwd)/mpv.conf" --profile=hdr $starttime$endtime"$OUTPUT_WALLPAPER"
-echo "mpv ended naturally without being terminated"
-# todo: make it loop forever between files or not as per command line options
+declare -i range=(${#wallpapers[@]}-1)
+declare -i last_index=-1
+declare -i random
+while true; do
+	random=$(shuf -i 0-$range -n 1)
+	if [[ $random -eq $last_index ]]; then
+		continue
+	fi
+	last_index=$random
+
+	media_file="${wallpapers[$random]}"
+	filename_parameters=$(timempv "$media_file")
+	echo "MPV is playing $media_file"
+	mpv --title=wallpaper-mpv --include="$(pwd)/mpv.conf" --profile=hdr $filename_parameters"$media_file"
+done
