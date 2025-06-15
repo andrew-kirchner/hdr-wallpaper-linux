@@ -74,11 +74,11 @@ for fileindex in "${!wallpapers[@]}"; do
 	unset "wallpapers[$fileindex]"
 done
 
-declare -i range=(${#wallpapers[@]}-1)
+declare -ir RANGE=(${#wallpapers[@]}-1)
 declare -i last_index=-1
 declare -i random
 while true; do
-	random=$(shuf -i 0-$range -n 1)
+	random=$(shuf -i 0-$RANGE -n 1)
 	if [[ $random -eq $last_index ]]; then
 		continue
 	fi
