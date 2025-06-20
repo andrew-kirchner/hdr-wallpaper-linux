@@ -1,15 +1,90 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 cd $(dirname "$0")
 MPV_CONF="$(pwd)/mpv.conf"
-FILE_OR_DIRECTORY=${1:-"$HOME/Videos"}
+FILE_OR_DIRECTORY="${1:-"$HOME/Videos"}"
 
 function throw {
-	local error_message="$1"
 	notify-send "Error:" "$1" -a "HDRpaper error"
 	echo "$1" >&2
 	exit 1
 }
+
+
+# modular option parser
+# fun learning excercise :)
+# would be in a separate file if this was a larger script
+# try to break it i dare you
+declare -a FLAGS
+declare -A OPTARGMAP
+declare -a POSITIONALS
+function parseoptions {
+	local -r GETOPT="$1"
+	#|I have not found a practical use for new lines here,
+	#|so for now it is cleaner and more secure to ban them
+	if [[ "$GETOPT" == *$'\n'* ]]; then
+		throw "Newlines not allowed in options!"
+	fi
+
+	#|replace all quoted text with arbitrary text of the
+	#|same length in order to further simplify regex
+	local sanitized="$GETOPT"
+	local redaction
+	local quote
+	while read -r quote; do
+		redaction=$(printf "X%.0s" $(seq 1 ${#quote}))
+		sanitized="${sanitized/"$quote"/"$redaction"}"
+	done < <(grep -Po "'.*?'(?!\\\'')" <<< "$GETOPT")
+
+	local -r SHORTLONG=$(grep -Po -- "^.*?(?= --(?:$| X))" <<< "$sanitized")
+	if grep -Pq -- "(-+[a-z]+).*\1" <<< "$SHORTLONG"; then
+		throw "No duplicate options!"
+	fi
+	#|iterate through both boolean flags and key value
+	#|options and assign them to their respective array/map
+	local option
+	local uptokey
+	local -i keyvalueindex
+	local key
+	local value
+	while read -r option; do
+		# I am a boolean flag
+		if [[ "$option" != *" "* ]]; then
+			FLAGS+=("$option")
+			continue
+		fi
+		# I am an option with an argument
+		key="${option%% *}"
+		#|use substring indices to replace crosses from
+		#|earlier with the option
+		uptokey=${sanitized%%"$option"*}
+		keyvalueindex=(${#uptokey}+${#key}+2)
+		value="${GETOPT:$keyvalueindex:(${#option}-${#key}-3)}"
+		value="${value//"'\\''"/"'"}"
+		OPTARGMAP["$key"]="$value"
+	done < <(grep -Po -- "-+[a-z]+(?: X+)?" <<< "$SHORTLONG")
+
+	local argument
+	local -i positional_index
+	local -i positional_length
+	local value
+	while read -r argument; do
+		positional_index="${argument%%:*}"
+		argument="${argument##*:}"
+		positional_length="${#argument}"
+		value="${GETOPT:$positional_index+1:$positional_length-2}"
+		echo "$value"
+		value="${value//"'\\''"/"'"}"
+		POSITIONALS+=("$value")
+	done < <(grep -Pob -- "X+(?!.*? --(?:$| ))" <<< "$sanitized")
+}
+
+# parseoptions "$(getopt -o abcx:y:z: -l long,sort: -- "$@")"
+# echo "${FLAGS[@]}"
+# echo "----"
+# echo "keys:${!OPTARGMAP[@]}|values:${OPTARGMAP[@]}"
+# echo "----"
+# echo "${POSITIONALS[@]}"
 
 function playsinglefile {
 	local media_file="$1"
@@ -20,7 +95,7 @@ function playsinglefile {
 		echo "Closed previous instance of this script for single file"
 	fi
 	#TODO: using loop and start/end parameters seems to not
-	# be supported for some reason
+	#be supported for some reason
 	mpv --title=wallpaper-mpv --include="$MPV_CONF" --profile=hdr \
 		--loop=inf \
 		--image-display-duration=inf \
@@ -85,7 +160,13 @@ while true; do
 	last_index=$random
 
 	media_file="${wallpapers[$random]}"
-	filename_parameters=$(timempv "$media_file")
+	filename_parameters="$(timempv "$media_file")"
 	echo "MPV is playing $media_file"
 	mpv --title=wallpaper-mpv --include="$(pwd)/mpv.conf" --profile=hdr $filename_parameters"$media_file"
+	if [[ $? == 4 ]]; then
+		echo "MPV has been pkilled, exiting"
+		exit 0
+	fi
+	# prevent crash after a few hours of buildup
+	sleep 1
 done
