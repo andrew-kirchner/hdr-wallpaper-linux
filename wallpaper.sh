@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd $(dirname "$0")
+cd $(dirname $(readlink -f "$0"))
 MPV_CONF="$(pwd)/mpv.conf"
 #TODO: multiple monitor support i.e. multiple sockets
 SOCKET="/tmp/wallpapersocket"
 declare -a DEFAULT_PATHS=("$HOME/Videos")
+
+# just use the command hdr to run this script
+# mkdir -p "$HOME/bin"
+# ln -sf "$(pwd)/wallpaper.sh" "$HOME/bin/hdr"
 
 function throw {
 	notify-send "Error:" "$1" -a "HDRpaper error"
