@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd $(dirname $(readlink -f "$0"))
-MPV_CONF="$(pwd)/mpv.conf"
-#TODO: multiple monitor support i.e. multiple sockets
-SOCKET="/tmp/wallpapersocket"
+#|just point to script directory instead of changing
+#|the pwd so relative paths can be used for media
+swd=$(dirname $(readlink -f "$0"))
+MPV_CONF="$swd/mpv.conf"
+MEDIA_SYMLINK="$swd/currentmedialink"
+SOCKET="$swd/mpvsocket"
+#TODO: possibly put sockets and links in /tmp for multi screen support
 declare -a DEFAULT_PATHS=("$HOME/Videos")
 
-# just use the command hdr to run this script
-# mkdir -p "$HOME/bin"
-# ln -sf "$(pwd)/wallpaper.sh" "$HOME/bin/hdr"
-
 function throw {
-	notify-send "Error:" "$1" -a "HDRpaper error"
-	echo "$1" >&2
+	notify-send "$1" "$2" -a "HDRpaper error" -e
+	echo "$1 $2" >&2
 	exit 1
 }
 
@@ -20,7 +19,7 @@ function throw {
 # fun learning excercise :)
 # would be in a separate file if this was a larger script
 # try to break it i dare you
-declare -a FLAGS
+declare -A FLAGS
 declare -A OPTARGMAP
 declare -a POSITIONALS
 function parseoptions {
@@ -30,7 +29,7 @@ function parseoptions {
 	#|you can still put newlines inbetween your flags and
 	#|stuff to format them as getopt cleans it
 	if [[ "$GETOPT" == *$'\n'* ]]; then
-		throw "Newlines not allowed in options!"
+		throw "Parsing error!" "Newlines are not allowed in options!"
 	fi
 
 	#|replace all quoted text with arbitrary text (crosses)
@@ -45,7 +44,7 @@ function parseoptions {
 
 	local -r SHORTLONG=$(grep -Po -- "^.*?(?= --(?:$| X))" <<< "$sanitized")
 	if grep -Pq -- "(-+[a-z]+).*\1" <<< "$SHORTLONG"; then
-		throw "No duplicate options!"
+		throw "Parsing error!" "No duplicate options!"
 	fi
 
 	#|iterate through both boolean flags and key value
@@ -58,7 +57,7 @@ function parseoptions {
 	while read -r option; do
 		# I am a boolean flag
 		if [[ "$option" != *" "* ]]; then
-			FLAGS+=("$option")
+			FLAGS["$option"]=1
 			continue
 		fi
 		# I am an option with an argument
@@ -89,46 +88,101 @@ function parseoptions {
 		POSITIONALS+=("$value")
 	done < <(grep -Pob -- "X+(?!.*? --(?:$| ))" <<< "$sanitized")
 }
+function flagpresent {
+	local flag="$1"
+	[[ "${FLAGS["-${flag:0:1}"]:-}" || "${FLAGS["--$flag"]:-}" ]]
+}
+
+SHORTOPTIONS="hqfrnabs:i:"
+LONGOPTIONS=\
+"help,quit,forever,replay,next,audio,battery,sort:,image-display-duration:"
+parseoptions "$(getopt -o "$SHORTOPTIONS" -l "$LONGOPTIONS" -- "$@")"
+
+if flagpresent "help"; then
+	cat <<DELIM
+Usage: wallpaper.sh [options] [mediapath1 mediapath2 ...]
+Play media file(s) as desktop wallpapers.
+
+    -h, --help          Display me then exit
+    -q, --quit            Quit the previous script and its mpv instance,
+                        exit with code 1 if no instance was found.
+    -f, --forever         Play the supplied or sorted and selected
+                        media file forever, without an IPC socket.
+    -r, --replay          Replay the current image/video again once it ends.
+                        This and -n are used in reference to the
+                        current MPV instance, unlike the others
+                        which are used on initiation of a new instance.
+    -n, --next            End the current file early and move on to the next
+                        media file in normal order.
+    -a, --audio           Enable audio playback for a new instance.
+                        Pro tip: you can change the volume by setting
+                        individual application volumes! It will be mpv
+    -b  --battery         Select only images from files in order to save on
+                        battery, energy, or performance... not that this
+                        script is proficient in any of those.
+    -s, --sort   {random|alphabetical|original}
+        Change the order in which supplied files are played.
+         Directories are expanded, with all the media being put in one
+         array and then sorted.
+    -i, --image-display-duration  {seconds|inf}
+        Alias for the MPV option, does not affect videos.
+
+Media paths can include anything except newlines. Your directories can
+include anything and the script will simply sort for media files.
+Creating a (successful) new wallpaper instance will implicitly
+close the possible preexisting instance.
+Use this or -n to shuffle until you get what you like!
+This script should live in the same directory as its mpv.conf and kwinrules.
+You can add a soft symlink to ~/bin for easy reference like a true application.
+Under Plasma system settings you can add this symlink as a login script.
+Repository page: <https://gitlab.com/andrewkirchner/HDRpaper>
+DELIM
+	exit 0
+fi
+if flagpresent "quit"; then
+	if pkill -f "mpv --title=wallpaper-mpv"; then
+		rm -f "$SOCKET"
+		exit 0
+	fi
+	exit 1
+fi
+if flagpresent "next"; then
+	socat - "$SOCKET" <<< '{ "command": ["stop"] }'
+	exit 0
+fi
+if flagpresent "replay"; then
+	CURRENT_FILE=$(socat - "$SOCKET" <<<\
+	'{ "command": ["get_property", "path"] }'\
+	| grep -Po "/[a-zA-z1-9./]+")
+	echo "$CURRENT_FILE"
+	socat - "$SOCKET" <<<\
+	"{ \"command\": [\"loadfile\", \"$CURRENT_FILE\", \"append\"] }"
+	exit 0
+fi
+if [[ ! -t 0 ]]; then
+	throw "Script must be ran in interactive console!"\
+	"Instead of using a direct shortcut use the .desktop entry" #TODO: lol
+	exit 0
+fi
+
 
 function plaympv {
 	local wallpaper="$1"
 	# use symlink to avoid json parsing/jq dependency
-	local socat_symlink=$(mktemp -u)
-	ln -s "$wallpaper" "$socat_symlink"
+	rm -f "$MEDIA_SYMLINK"
+	ln -s "$wallpaper" "$MEDIA_SYMLINK"
 	socat - "$SOCKET"\
-	<<< "{ \"command\": [\"loadfile\", \"$socat_symlink\", \"replace\"] }"\
+	<<< "{ \"command\": [\"loadfile\", \"$MEDIA_SYMLINK\", \"replace\"] }"\
 	>/dev/null
-	unlink "$socat_symlink"
 }
-
-#TODO: add this back in
-function timevideo {
-	local videoname=$(basename "$1")
-	local parameters=""
-	local -i start_time
-	local -i end_time
-	if start_time=$(grep -Po '^\d{1,6}' <<< "$videoname"); then
-		parameters+="--start=$start_time "
-	fi
-	if end_time=$(grep -Po '\d{1,6}(?=\.[^.]+$)' <<< "$videoname");  then
-		parameters+="--end=$end_time "
-	fi
-	echo "$parameters"
-}
-
-
-SHORTOPTIONS="hvqrs:i:"
-LONGOPTIONS="help,version,quit,replay,sort:,image-display-duration:"
-parseoptions "$(getopt -o "$SHORTOPTIONS" -l "$LONGOPTIONS" -- "$@")"
 
 if [[ ! "${POSITIONALS[@]}" ]]; then
 	POSITIONALS=("${DEFAULT_PATHS[@]}")
 fi
-
 declare -a WALLPAPERS
 for media_path in "${POSITIONALS[@]}"; do
 	if [[ ! -r "$media_path" ]]; then
-		throw "\"$media_path\" is not a file or directory!"
+		throw "Parsing error!" "\"$media_path\" is not a file or directory!"
 	fi
 	if [[ -d "$media_path" ]]; then
 		while IFS= read -r -d $'\0' item; do
@@ -143,7 +197,7 @@ for media_path in "${POSITIONALS[@]}"; do
 	fi
 done
 if [[ ${#WALLPAPERS[@]} == 0 ]]; then
-	throw "No wallpapers supplied from paths!"
+	throw "Parsing error!" "No wallpapers supplied from paths!"
 fi
 if [[ ${#WALLPAPERS[@]} == 1 ]]; then
 	echo "Playing single file forever..."
@@ -159,7 +213,6 @@ if pkill -f "mpv --title=wallpaper-mpv"; then
 fi
 rm -f "$SOCKET"
 mpv --title=wallpaper-mpv --input-ipc-server="$SOCKET" --include="$MPV_CONF" &
-# > /dev/null 2>&1
 while [[ ! -S "$SOCKET" ]]; do
 	sleep 1
 done
@@ -169,13 +222,25 @@ declare -i random=$(shuf -i 0-$RANGE -n 1)
 declare -i last_index=$random
 echo "MPV is playing ${WALLPAPERS[$random]}"
 plaympv "${WALLPAPERS[$random]}"
+
+#|prevents terminal window from breaking
+#|when mpv is pkilled
+function cleanup {
+	stty echo
+	pkill -f "mpv --title=wallpaper-mpv" || true
+	exit 0
+}
+trap cleanup EXIT
+
 while read -r event; do
 	if [[ "$event" != *"idle"* ]]; then continue; fi
-	random=last_index
+# 	sleep 1
+	random=$last_index
 	while [[ $random == $last_index ]]; do
 		random=$(shuf -i 0-$RANGE -n 1)
 	done
+	last_index=$random
 	echo "MPV is playing ${WALLPAPERS[$random]}"
 	plaympv "${WALLPAPERS[$random]}"
 done < <(socat - "$SOCKET")
-echo "MPV and program have closed."
+echo "Script ended naturally :)"
