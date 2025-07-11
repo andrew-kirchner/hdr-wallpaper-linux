@@ -107,9 +107,9 @@ function parseoptions {
 	done < <(grep -Pob -- "X+(?!.*? --(?:$| ))" <<< "$sanitized")
 }
 
-SHORTOPTIONS="hqrsp:i:"
+SHORTOPTIONS="hqrsop:i:"
 LONGOPTIONS=\
-"help,quit,repeat,skip,playlist:,image-display-duration:"
+"help,quit,repeat,skip,osd,playlist:,image-display-duration:"
 parseoptions "$(getopt -o "$SHORTOPTIONS" -l "$LONGOPTIONS" -- "$@")"
 
 function flagpresent {
@@ -147,6 +147,11 @@ if flagpresent "repeat"; then
 	'{"command":["show-text","file will repeat...\n",2000]}'
 	socat - "$SOCKET" <<< \
 	"{\"command\":[\"loadfile\",\"$MEDIA_SYMLINK\",\"append\"]}"
+	exit 0
+fi
+if flagpresent "osd"; then
+	socat - /tmp/HDRsocket <<< \
+	'{"command":["cycle-values","input-cursor-passthrough","yes","no"]}'
 	exit 0
 fi
 #=====

@@ -1,12 +1,8 @@
 [HDRpaper]
 Description=HDRpaper
 acceptfocusrule=2
-disableglobalshortcuts=true
-disableglobalshortcutsrule=2
 fpplevel=4
 fpplevelrule=2
-fullscreen=true
-fullscreenrule=2
 layer=below
 layerrule=2
 skippager=true
