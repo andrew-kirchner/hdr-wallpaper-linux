@@ -6,7 +6,6 @@ swd=$(dirname $(readlink -f "$0"))
 MPV_CONF="$swd/mpv.conf"
 MEDIA_SYMLINK="/tmp/HDRmediasymlink"
 SOCKET="/tmp/HDRsocket"
-SOCAT_PTY="/tmp/HDRpty"
 declare -a DEFAULT_PATHS=("$HOME/Videos")
 
 function throw {
@@ -188,20 +187,19 @@ function cleanup {
 }; trap cleanup EXIT
 if pkill -f "mpv --title=wallpaper-mpv"; then
 	printf "Closed previous instance of this script!\n"
+	sleep 1
 fi
 
 mpv --title=wallpaper-mpv --input-ipc-server="$SOCKET" --include="$MPV_CONF" &
 if ! waitpath "$SOCKET"; then
 	throw "Socket error" "MPV's socket failed to open!"
 fi
-#|Create a pseudo terminal with its own stdin and out
-#|for socat to use, allowing the script to be executed
-#|from limited environments like kRunner and shortcuts
-socat pty,raw,echo=0,link="$SOCAT_PTY" UNIX-CONNECT:"$SOCKET" &
-if ! waitpath "$SOCAT_PTY"; then
-	throw "PTY error" "socat terminal failed to open!"
-fi
-exec 3<>"$SOCAT_PTY"
+
+#|open one socat instance that sends and receives
+#|messages with their own file descriptors; compare to
+#|socat pty,raw,echo=0,link="$SOCAT_PTY" UNIX-CONNECT:"$SOCKET" &
+#|waitpath... exec 3<>"$SOCAT_PTY"
+coproc IPC { socat UNIX-CONNECT:"$SOCKET" - ; }
 
 # https://mpv.io/manual/master/#list-of-input-commands
 # https://mpv.io/manual/master/#json-ipc
@@ -211,14 +209,13 @@ function plaympv {
 	rm -f "$MEDIA_SYMLINK"
 	ln -sr "$wallpaper" "$MEDIA_SYMLINK"
 	printf "\e[36m%s\e[0m\n" "MPV is playing $wallpaper"
-	echo "{\"command\":[\"loadfile\",\"$MEDIA_SYMLINK\"]}" >&3
+	echo "{\"command\":[\"loadfile\",\"$MEDIA_SYMLINK\"]}" >&"${IPC[1]}"
 }
 
-# plaympv "/home/reggie/Videos/daylight.ts"
-declare -ir RANGE=${#WALLPAPERS[@]}
+declare -ir RANGE=(${#WALLPAPERS[@]}-1)
 declare -i random=$(shuf -n 1 -i 0-$RANGE)
 plaympv "${WALLPAPERS[$random]}"
-while read -u 3 event; do
+while read -r event <&"${IPC[0]}"; do
 	case "$event" in
 		*'"reason":"error"'*)
 			throw "Fatal Error" "$event"
