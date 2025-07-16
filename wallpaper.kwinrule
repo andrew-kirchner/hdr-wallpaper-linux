@@ -1,8 +1,8 @@
 [HDRpaper]
 Description=HDRpaper
 acceptfocusrule=2
-fpplevel=4
-fpplevelrule=2
+fsplevel=4
+fsplevelrule=2
 layer=below
 layerrule=2
 skippager=true
@@ -14,6 +14,6 @@ skiptaskbarrule=2
 title=wallpaper-mpv
 titlematch=2
 types=1
-wmclass=mpv
+wmclass=mpv mpv
 wmclasscomplete=true
 wmclassmatch=2
