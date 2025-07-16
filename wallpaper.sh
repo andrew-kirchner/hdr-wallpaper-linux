@@ -17,12 +17,14 @@ modify the current instance instead of creating a new one.
 	help, h     Display me then exit
 	quit, q     Force close mpv and script, throws if not found
 	skip, s     End the current media file and play the next one
-	              as per --repeat then --playlist
+	              as per --repeat then --sort
 	repeat, r   Loop the current media file once once it ends;
-	              throws if file is set to play forever
+	              throws if file is set to loop forever
 	osd, o      Toggle OSD, or more specifically the ability
 	              for the window to receive pointer events.
 	              Will also capture exclusively mpv shortcuts!
+	audio, a    Permanently enable audio for current instance.
+	              Toggle volume with the normal mute option!
 ==|=======================================================================|==
 \e[0mBoolean Flags [ -m --mode ] ?= false
 These options are used on initialization of a new instance;
@@ -37,8 +39,9 @@ Arguments with values [ -k v --key v --key=v ] ?= default
 	  control the order in which valid media paths are played
 	    =weighted       Pick media such that they would approach
 	                      on average being on screen equally often.
-	                      Falls back to random if duration/loop is inf!
+	                      Falls back to random if --loop is set!
 	    =random         Pick all media in paths with uniform distribution
+	    =randarg        Pick a random top level mediapath then file each time
 	    =alphabetical   Play in order based on basename of all media files
 	    =newest         Play files in order of the date last moved
 	    =none           Play in whatever order supplied by you or find
@@ -120,7 +123,8 @@ function parseoptions {
 	done < <(grep -Po "'.*?'(?!\\\'')" <<< "$GETOPT")
 
 	local -r SHORTLONG=$(grep -Po -- "^.*?(?= --(?:$| X))" <<< "$sanitized")
-	if grep -Pq -- "(-+[a-z]+).*\1" <<< "$SHORTLONG"; then
+
+	if grep -Pq -- " (-+[a-z-]+).*\1" <<< "$SHORTLONG"; then
 		throw "Parsing error" "No duplicate options!"
 	fi
 
@@ -147,7 +151,7 @@ function parseoptions {
 		value="${GETOPT:$keyvalueindex:(${#option}-${#key}-3)}"
 		value="${value//"'\\''"/"'"}"
 		OPTARGMAP["$key"]="$value"
-	done < <(grep -Po -- "-+[a-z]+(?: X+)?" <<< "$SHORTLONG")
+	done < <(grep -Po -- " -+[a-z-]+(?: X+)?" <<< "$SHORTLONG")
 
 	# do much of the same tricks for positional arguments
 	local argument
@@ -168,10 +172,9 @@ function parseoptions {
 
 SHORTOPTIONS="hlns:i:e:"
 LONGOPTIONS=\
-"help,loop,no-config,sort:,image-display-duration:,e:"
+"help,loop,no-config,sort:,image-display-duration:,exclude:"
 parseoptions "$(getopt -o "$SHORTOPTIONS" -l "$LONGOPTIONS" -- "$@")"
 
-echo "${POSITIONALS[@]}"
 if [[ ! -v POSITIONALS ]]; then
 	POSITIONALS=("${DEFAULT_PATHS[@]}")
 elif grep -Pq "^[a-zA-Z ]+$" <<< "${POSITIONALS[@]}"; then
@@ -201,16 +204,19 @@ elif grep -Pq "^[a-zA-Z ]+$" <<< "${POSITIONALS[@]}"; then
 		repeat|r)
 			socat - "$SOCKET" <<< \
 			'{command=["show-text","file will repeat...\n",2000]}'
+			# goes away automatically after file ends
 			socat - "$SOCKET" <<< \
-			"{command=[\"loadfile\",\"$MEDIA_SYMLINK\",\"append\"]}"
+			'{command=["set_property","loop",1]}'
 		;;
 		osd|o)
 			socat - "$SOCKET" <<< \
 			'{command=["cycle-values","input-cursor-passthrough","yes","no"]}'
 			socat - "$SOCKET" <<< \
 			'{command=["cycle-values","osc","yes","no"]}'
+		;;
+		audio|a)
 			socat - "$SOCKET" <<< \
-			'{command=["cycle-values","drag-and-drop","no","append"]}'
+			'{command=["set_property","audio","yes"]}'
 		;;
 		*) throw "Argument error" "Invalid command $COMMAND";;
 	esac
@@ -223,6 +229,16 @@ function flagpresent {
 if flagpresent "help"; then
 	helptext
 	exit 0
+fi
+declare mpv_args=""
+flagpresent "loop" && mpv_args+=" --loop=inf --image-display-duration=inf"
+flagpresent "no-config" && mpv_args+=" --no-config"
+IMAGE_DURATION=\
+"${OPTARGMAP["-i"]:-"${OPTARGMAP["--image-display-duration"]:-}"}"
+if [[ -n "$IMAGE_DURATION" ]];  then
+	grep -Pq "^(?:[0-9.]+|inf)$" <<< "$IMAGE_DURATION" || throw \
+	"Argument error" "Invalid --image-display-duration! $IMAGE_DURATION"
+	mpv_args+=" --image-display-duration=$IMAGE_DURATION"
 fi
 
 declare -a WALLPAPER_PATHS
@@ -310,17 +326,27 @@ if pkill -f "mpv --title=wallpaper-mpv"; then
 	sleep 1
 fi
 
+mpv --title="wallpaper-mpv" --input-ipc-server="$SOCKET"\
+$mpv_args --include="$MPV_CONF" -- &
 
-mpv --title="wallpaper-mpv" --input-ipc-server="$SOCKET" --include="$MPV_CONF" &
 if ! waitsocket "$SOCKET"; then
 	throw "Socket error" "MPV's socket failed to open!"
 fi
 
 #|open one socat instance that sends and receives
-#|messages with their own file descriptors; compare to
+#|messages with its own file descriptors; compare to
 #|socat pty,raw,echo=0,link="$SOCAT_PTY" UNIX-CONNECT:"$SOCKET" &
 #|waitpath... exec 3<>"$SOCAT_PTY"
 coproc IPC { socat UNIX-CONNECT:"$SOCKET" - ; }
+
+#|Causes two messages to fire on file change.
+echo '{command=["observe_property",1,"playlist-pos"]}' >&${IPC[1]}
+#| {"data":{"playlist_entry_id":N},"request_id":0,"error":"success"}
+#| {"event":"property-change","id":1,"name":"playlist-pos","data":N}
+#| The playlist pos will reliably fire as "data":-1 when a file
+#| ends with nothing else looping or in the playlist.
+#| This is caught with *playlist-pos*-1* to avoid
+#| dependencies for parsing JSON.
 
 # https://mpv.io/manual/master/#list-of-input-commands
 # https://mpv.io/manual/master/#json-ipc
@@ -334,14 +360,22 @@ function plaympv {
 }
 
 declare -ir RANGE=(${#WALLPAPER_PATHS[@]}-1)
-declare -i random=$(shuf -n 1 -i 0-$RANGE)
-plaympv "${WALLPAPER_PATHS[$random]}"
+declare -i random
 while read -r event <&"${IPC[0]}"; do
 	case "$event" in
 		*'"reason":"error"'*)
+			#| generic errors, misses nonfatal errors
+			#| like ffmpeg or seeking
+			#| should probably never actually fire
 			throw "Fatal Error" "$event"
 		;;
-		*end-file*);;
+		*playlist-pos*-1*)
+			#| Fires when mpv is created or there are no
+			#| more files to play. It is more
+			#| robust than end-file as it accounts for
+			#| playlist files; it does not depend on the
+			#| idle or tick events either, which are deprecated.
+		;;
 		*) continue;;
 	esac
 	random=$(shuf -n 1 -i 0-$RANGE)
