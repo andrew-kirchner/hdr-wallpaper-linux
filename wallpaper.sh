@@ -281,7 +281,6 @@ function searchdirectory {
 	fi
 	kill $RELAY_PID
 }
-
 function probevideo {
 	local video="$1"
 	local duration="$(ffprobe -v error \
@@ -293,7 +292,6 @@ function probevideo {
 }
 
 searchdirectory
-
 if [[ ! -v WALLPAPER_PATHS ]]; then
 	throw "Argument Error" "No media paths supplied!"
 fi
