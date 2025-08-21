@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
+declare -a DEFAULT_PATHS=("$HOME/Videos" "$HOME/Pictures/new")
 readonly MPV_CONF="$(dirname $(readlink -f "$0"))/mpv.conf"
+
 readonly MEDIA_SYMLINK="/tmp/HDRpaper"
 readonly SOCKET="/tmp/HDRsocket"
-declare -a DEFAULT_PATHS=("$HOME/Videos" "$HOME/Pictures")
 
 function helptext {
 	printf \
@@ -77,19 +78,16 @@ function waitsocket {
 	return 0
 }
 
-# in case these are defined from environment
-unset FLAGS
-unset OPTARG_MAP
-unset POSITIONALS
-unset SUCCESS
-unset SUBCOMMAND
-unset preset_options
+function rand {
+	od -An -N2 -i /dev/urandom | awk "{print (\$1 % 65536)/65535 }"
+}
 
-SUBCOMMANDS="help|h|quit|skip|repeat|osd"
+SUBCOMMANDS="help,h,quit,q,skip,s,repeat,r,osd,o,itm"
+unset subcommand
 if [[ -v 1 ]]; then
 	possible_subcommand="${1,,}"
-	if [[ "$possible_subcommand" =~ $SUBCOMMANDS ]]; then
-		readonly SUBCOMMAND="$possible_subcommand"
+	if [[ ",$SUBCOMMANDS," == *",$possible_subcommand,"* ]]; then
+		subcommand="$possible_subcommand"
 		shift
 	fi
 fi
@@ -98,9 +96,9 @@ fi
 #|fun learning exercise :)
 #|would be in a separate file if this was a larger script
 #|try to break it i dare you
-declare -A FLAGS
-declare -A OPTARG_MAP
-declare -a POSITIONALS
+declare -A FLAGS=()
+declare -A OPTARG_MAP=()
+declare -a POSITIONALS=()
 function parseoptions {
 	# quit if getopt throws an error with nowhere to log it
 	[[ "$?" != 0  ]] && ! tty --quiet && throw "Argument error!" \
@@ -190,7 +188,59 @@ if isflagpresent help h; then
 	exit 0
 fi
 
+if [[ -v subcommand ]]; then
+	case "$subcommand" in
+		help|h)
+			helptext
+		;;
+		quit|q)
+			if pkill -f "mpv --title=wallpaper-mpv"; then
+				rm -f "$SOCKET"
+				rm -f "$MEDIA_SYMLINK"
+				exit 0
+			fi
+			throw "Error Quitting Script" \
+			"mpv window was not found!"
+		;;
+		skip|s)
+			socat - "$SOCKET" <<< \
+			'{command=["show-text","skipping...\n",1000]}'
+			socat - "$SOCKET" <<< \
+			'{command=["playlist-next","force"]}'
+		;;
+		repeat|r)
+			socat - "$SOCKET" <<< \
+			'{command=["show-text","file will repeat...\n",2000]}'
+			# goes away automatically after file ends
+			socat - "$SOCKET" <<< \
+			'{command=["set_property","loop",1]}'
+		;;
+		osd|o)
+			socat - "$SOCKET" <<< \
+			'{command=["cycle-values","input-cursor-passthrough","yes","no"]}'
+			socat - "$SOCKET" <<< \
+			'{command=["cycle-values","osc","yes","no"]}'
+		;;
+		itm)
+			#|debugging only, to see what the itm does with reference
+			#|be careful using this when switching between SDR and HDR files!
+			#|set the target peak to whatever your monitor's is, mine is 480
+			#|for target-prim you can try bt.709 instead of auto which is p3
+			socat - "$SOCKET" <<< \
+			'{command=["cycle-values","target-prim","auto","bt.2020"]}'
+			socat - "$SOCKET" <<< \
+			'{command=["cycle-values","target-trc","auto","pq"]}'
+			socat - "$SOCKET" <<< \
+			'{command=["cycle-values","target-peak","auto","480"]}'
+			socat - "$SOCKET" <<< \
+			'{command=["cycle-values","inverse-tone-mapping","yes","no"]}'
+		;;
+	esac
+	exit 0
+fi
+
 declare -a preset_options=()
+unset FORCE_LOOP ONLY_IMAGES ONLY_VIDEOS
 if isflagpresent loop l; then
 	preset_options+=("--loop=inf --image-display-duration=inf")
 	readonly FORCE_LOOP=0
@@ -207,42 +257,6 @@ fi
 
 if [[ ! -v POSITIONALS ]]; then
 	POSITIONALS=("${DEFAULT_PATHS[@]}")
-fi
-if [[ -v SUBCOMMAND ]]; then
-	case "$SUBCOMMAND" in
-		help|h)
-			helptext
-		;;
-		quit)
-			if pkill -f "mpv --title=wallpaper-mpv"; then
-				rm -f "$SOCKET"
-				rm -f "$MEDIA_SYMLINK"
-				exit 0
-			fi
-			throw "Error Quitting Script" \
-			"mpv window was not found!"
-		;;
-		skip)
-			socat - "$SOCKET" <<< \
-			'{command=["show-text","skipping...\n",1000]}'
-			socat - "$SOCKET" <<< \
-			'{command=["playlist-next","force"]}'
-		;;
-		repeat)
-			socat - "$SOCKET" <<< \
-			'{command=["show-text","file will repeat...\n",2000]}'
-			# goes away automatically after file ends
-			socat - "$SOCKET" <<< \
-			'{command=["set_property","loop",1]}'
-		;;
-		osd)
-			socat - "$SOCKET" <<< \
-			'{command=["cycle-values","input-cursor-passthrough","yes","no"]}'
-			socat - "$SOCKET" <<< \
-			'{command=["cycle-values","osc","yes","no"]}'
-		;;
-	esac
-	exit 0
 fi
 
 function getOPTARG {
@@ -269,18 +283,18 @@ SORT_METHOD="$(
 )"
 SORT_METHOD="${SORT_METHOD:-proportional}"
 
-declare -a WALLPAPER_PATHS
+declare -a WALLPAPER_PATHS=()
 declare -A IMAGE_MAP=()
 declare -A VIDEO_MAP=()
 while read -r -d $'\0' path; do
 	mime_type="$(file -b --mime-type "$path")"
+	if [[ "$path" == *$'\n'* &&
+		( "$mime_type" == image/* || "$mime_type" == video/*)
+	]]; then
+		# would mess up coproc IPC because it's newline delimited
+		throw "Newline Error" "$path"
+	fi
 	case "$mime_type" in
-		image/*|video/*)
-			# this would mess with the coproc later
-			if [[ "$path" == *$'\n'* ]]; then
-				throw "Newline Error" "$path"
-			fi
-		;;&
 		image/*)
 			if [[ -v ONLY_VIDEOS ]]; then continue; fi
 			WALLPAPER_PATHS+=("$path")
@@ -299,6 +313,7 @@ if [[ ! -v WALLPAPER_PATHS ]]; then
 	throw "Argument Error" "No valid media paths supplied!"
 fi
 
+unset AVERAGE_DURATION
 function probepositionals {
 	coproc RELAY {
 		while read line; do
@@ -374,8 +389,7 @@ function pickproportional {
 		IMAGE_TOTAL = ${#IMAGE_MAP[@]}
 		if (${#IMAGE_MAP[@]} == 0) exit 1;
 		MEDIA_TOTAL = IMAGE_TOTAL + ${#VIDEO_MAP[@]}
-		srand(${SRANDOM:$RANDOM})
-		exit( IMAGE_TOTAL/MEDIA_TOTAL > rand() )
+		exit( IMAGE_TOTAL/MEDIA_TOTAL > $(rand) )
 	}"; then
 		#|consider the duration weight of all images
 		#|at once and then just pick a random one
@@ -389,9 +403,7 @@ function pickproportional {
 		done
 		throw "impossible" "uh oh"
 	fi
-	local random="$(
-		awk "BEGIN{srand(${SRANDOM:$RANDOM});print rand()}"
-	)"
+	local random="$(rand)"
 	local probability_sum="0.0"
 	for path in "${!VIDEO_MAP[@]}"; do
 		probability_sum="$(
@@ -476,7 +488,11 @@ function plaympv {
 }
 
 declare -a path_history=()
-declare -ir HISTORY_LENGTH=2
+declare -i HISTORY_LENGTH=2
+if (( HISTORY_LENGTH > ${#WALLPAPER_PATHS[@]} )); then
+	HISTORY_LENGTH=(${#WALLPAPER_PATHS[@]}-1)
+fi
+
 while read -r event <&${IPC[0]}; do
 	# use simple matching to avoid jq dependency
 	case "$event" in
@@ -495,6 +511,7 @@ while read -r event <&${IPC[0]}; do
 		;;
 		*) continue;;
 	esac
+
 	if (( ${#WALLPAPER_PATHS[@]} <= $HISTORY_LENGTH )); then
 		plaympv "$(pickpickcarrotmethod)"
 		continue
