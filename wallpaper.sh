@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
-declare -a DEFAULT_PATHS=("$HOME/Videos" "$HOME/Pictures/new")
-readonly MPV_CONF="$(dirname $(readlink -f "$0"))/mpv.conf"
+declare -a DEFAULT_PATHS=("$HOME/Videos" "$HOME/Pictures/pikmin")
+readonly SCRIPT_DIR="$(dirname $(readlink -f "$0"))"
+readonly MPV_CONF="$SCRIPT_DIR/mpv.conf"
+readonly ITM_CONF="$SCRIPT_DIR/inversetonemapping.conf"
 
 readonly MEDIA_SYMLINK="/tmp/HDRpaper"
 readonly SOCKET="/tmp/HDRsocket"
@@ -32,6 +34,7 @@ These options are used only on initialization of a new instance.
     --no-config     Alias for mpv option, do not use personal config.
     --only-images   Ignore videos when looking for media files.
     --only-videos   Ignore images when looking for media files.
+    --disable-itm   Disable inversetonemapping.conf for SDR media.
 
 Arguments with values [ -k value --key value --key=value ] ?= default
 These options require a value and are only passed on a new instance.
@@ -82,12 +85,11 @@ function rand {
 	od -An -N2 -i /dev/urandom | awk "{print (\$1 % 65536)/65535 }"
 }
 
-SUBCOMMANDS="help,h,quit,q,skip,s,repeat,r,osd,o,itm"
+SUBCOMMANDS="HELP,H,QUIT,Q,SKIP,S,REPEAT,R,OSD,O,ITM"
 unset subcommand
 if [[ -v 1 ]]; then
-	possible_subcommand="${1,,}"
-	if [[ ",$SUBCOMMANDS," == *",$possible_subcommand,"* ]]; then
-		subcommand="$possible_subcommand"
+	if [[ ",$SUBCOMMANDS," == *",${1^^},"* ]]; then
+		subcommand="${1,,}"
 		shift
 	fi
 fi
@@ -173,7 +175,7 @@ function parseoptions {
 
 readonly SHORTOPTIONS="hls:"
 readonly LONGOPTIONS=\
-"help,loop,no-config,only-images,only-videos,sort:"
+"help,loop,no-config,only-images,only-videos,disable-itm,sort:"
 parseoptions "$(getopt -o "$SHORTOPTIONS" -l "$LONGOPTIONS" -- "$@")"
 # declare -p FLAGS
 # declare -p OPTARG_MAP
@@ -246,13 +248,16 @@ if isflagpresent loop l; then
 	readonly FORCE_LOOP=0
 fi
 if isflagpresent no-config; then
-	preset_options+="--no-config"
+	preset_options+=("--no-config")
 fi
 if isflagpresent only-images; then
 	readonly ONLY_IMAGES=0
 fi
 if isflagpresent only-videos; then
 	readonly ONLY_VIDEOS=0
+fi
+if ! isflagpresent disable-itm; then
+	preset_options+=("--include=$ITM_CONF")
 fi
 
 if [[ ! -v POSITIONALS ]]; then
@@ -428,10 +433,8 @@ fi
 case "$SORT_METHOD" in
 	proportional)
 		probepositionals
-		if [[ ! -v FORCE_LOOP ]]; then
+		if [[ ${#IMAGE_MAP[@]} -ne 0 && ! -v FORCE_LOOP ]]; then
 			preset_options+=("--image-display-duration=$AVERAGE_DURATION")
-		fi
-		if [[ ${#IMAGE_MAP[@]} -ne 0 ]]; then
 			printf "\e[34m%s\e[0m\n" \
 "Wallpapers from ${#IMAGE_MAP[@]} static image files will play for
 $AVERAGE_DURATION seconds on average, the mean of ${#VIDEO_MAP[@]} videos passed."
@@ -444,6 +447,11 @@ $AVERAGE_DURATION seconds on average, the mean of ${#VIDEO_MAP[@]} videos passed
 	;;
 	*) throw "unimplemented" "$SORT_METHOD";;
 esac
+if [[ -v FORCE_LOOP ]]; then
+	printf "\e[34m%s\e[0m\n" \
+"${#IMAGE_MAP[@]} images and ${#VIDEO_MAP[@]} videos will play
+indefinitely until SKIP is called!"
+fi
 
 function cleanup {
 	rm -f "$MEDIA_SYMLINK"
@@ -488,10 +496,7 @@ function plaympv {
 }
 
 declare -a path_history=()
-declare -i HISTORY_LENGTH=2
-if (( HISTORY_LENGTH > ${#WALLPAPER_PATHS[@]} )); then
-	HISTORY_LENGTH=(${#WALLPAPER_PATHS[@]}-1)
-fi
+declare -i HISTORY_LENGTH=4
 
 while read -r event <&${IPC[0]}; do
 	# use simple matching to avoid jq dependency
@@ -512,7 +517,7 @@ while read -r event <&${IPC[0]}; do
 		*) continue;;
 	esac
 
-	if (( ${#WALLPAPER_PATHS[@]} <= $HISTORY_LENGTH )); then
+	if (( ${#WALLPAPER_PATHS[@]} <= HISTORY_LENGTH )); then
 		plaympv "$(pickpickcarrotmethod)"
 		continue
 	fi
@@ -521,7 +526,7 @@ while read -r event <&${IPC[0]}; do
 		next_file="$(pickpickcarrotmethod)"
 	done
 	path_history+=("$next_file")
-	if (( ${#path_history[@]} > $HISTORY_LENGTH )); then
+	if (( ${#path_history[@]} > HISTORY_LENGTH )); then
 		path_history=("${path_history[@]:1}")
 	fi
 	plaympv "$next_file"
