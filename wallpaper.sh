@@ -33,7 +33,11 @@ modify the current instance instead of creating a new one.
               throws if file is set to loop forever
     OSD     Toggle OSD, or more specifically the ability
               for the window to receive pointer events.
-              Will also capture exclusively mpv shortcuts!\e[035m
+              Will also capture exclusively mpv shortcuts!
+    AUDIO   Enable audio for the current instance. Audio
+              is not just muted but disabled by default!
+    ITM     Toggle inverse tone mapping for SDR media.
+              Test the differnece for both images and videos!\e[035m
 ==|==========================================================================|==
 \e[0mBoolean Flags [ -m --mode ] ?= false
 These options are used only on initialization of a new instance.
@@ -42,7 +46,6 @@ These options are used only on initialization of a new instance.
     --no-config     Alias for mpv option, do not use personal config.
     --only-images   Ignore videos when looking for media files.
     --only-videos   Ignore images when looking for media files.
-    --disable-itm   Disable inversetonemapping.conf for SDR media.
 
 Arguments with values [ -k value --key value --key=value ] ?= default
 These options require a value and are only passed on a new instance.
@@ -59,7 +62,14 @@ These options require a value and are only passed on a new instance.
       =randarg          Pick a random top level mediapath then file each time
       =alphabetical     Play in order based on basename of all media files
       =newest           Play files in order of the date last moved
-      =none             Play in whatever order supplied by the find command\e[34m
+      =none             Play in whatever order supplied by the find command
+    -i, --itm ?= all
+    Choose what type of SDR media inverse tone mapping upto HDR is applied to.
+      =all             Use bt.2446a for images and videos. Set target-peak!
+      =only-images     Use bt.2446a for images only. Videos unchanged
+      =only-videos     Use bt.2446a for videos only. Images unchanged
+      =none            Disable itm always, displaying SDR in SDR or P3
+\e[34m
 ==|==========================================================================|==
 \e[0m
 Repository page: <https://gitlab.com/andrewkirchner/HDRpaper>\n"
@@ -97,7 +107,7 @@ function rand {
 #|system level rules:
 #|/etc/xdg/kwinrulesrc
 #|personal rules
-#|~.config/kwinrulesrc
+#|~/.config/kwinrulesrc
 function applykdewindowrule {
 	local FILE_KWINRULE="$1"
 	local RULE_NAME="$(grep -Po "(?<=\[).+?(?=\])" "$FILE_KWINRULE")"
@@ -152,7 +162,7 @@ You can see all types of rules in plasma settings.\n"
 }
 applykdewindowrule "$WALLPAPER_KWINRULE"
 
-SUBCOMMANDS="HELP,H,QUIT,Q,SKIP,S,REPEAT,R,OSD,O,AUDIO,A,ITM"
+SUBCOMMANDS="HELP,H,QUIT,Q,SKIP,S,REPEAT,R,OSD,O,AUDIO,A,ITM,I"
 unset subcommand
 if [[ -v 1 ]]; then
 	if [[ ",$SUBCOMMANDS," == *",${1^^},"* ]]; then
@@ -240,9 +250,9 @@ function parseoptions {
 	done < <(grep -Pob -- "X+(?!.*? --(?:$| ))" <<< "$sanitized")
 }
 
-readonly SHORTOPTIONS="hls:"
+readonly SHORTOPTIONS="hls:i:"
 readonly LONGOPTIONS=\
-"help,loop,no-config,only-images,only-videos,disable-itm,sort:"
+"help,loop,no-config,only-images,only-videos,sort:,itm:"
 parseoptions "$(getopt -o "$SHORTOPTIONS" -l "$LONGOPTIONS" -- "$@")"
 # declare -p FLAGS
 # declare -p OPTARG_MAP
@@ -294,11 +304,11 @@ if [[ -v subcommand ]]; then
 			socat - "$SOCKET" <<< \
 			'{command=["set_property","audio","auto"]}'
 		;;
-		itm)
-			#|debugging only, to see what the itm does with reference
-			#|be careful using this when switching between SDR and HDR files!
-			#|set the target peak to whatever your monitor's is, mine is 480
-			#|for target-prim you can try bt.709 instead of auto which is p3
+		itm|i)
+			#|the user-data property cant be used because
+			#|the profile-restore functionality just breaks
+			#|for target-prim you can try bt.709
+			#|instead of auto which is maybe oversaturated p3
 			socat - "$SOCKET" <<< \
 			'{command=["cycle-values","target-prim","auto","bt.2020"]}'
 			socat - "$SOCKET" <<< \
@@ -324,9 +334,6 @@ if isflagpresent only-images; then
 fi
 if isflagpresent only-videos; then
 	readonly ONLY_VIDEOS=0
-fi
-if ! isflagpresent disable-itm; then
-	preset_options+=("--include=$ITM_CONF")
 fi
 
 if [[ ! -v POSITIONALS ]]; then
@@ -541,6 +548,17 @@ mpv --title="wallpaper-mpv" --input-ipc-server="$SOCKET" \
 if ! waitsocket "$SOCKET"; then
 	throw "Socket error" "MPV's socket failed to open!"
 fi
+case "$(getOPTARG itm "all|image|video|none" i)" in
+	all);; # dont disable anything
+	*image*|*none*)
+		socat - "$SOCKET" <<< \
+		'{command=["set_property","user-data/novideo",true]}'
+	;;&
+	*video*|*none*)
+		socat - "$SOCKET" <<< \
+		'{command=["set_property","user-data/noimage",true]}'
+	;;
+esac
 
 #|open one socat instance that sends and receives
 #|messages with its own file descriptors; compare to
