@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 declare -a DEFAULT_PATHS=("$HOME/Videos" "$HOME/Pictures/pikmin")
-readonly SCRIPT_DIR="$(dirname $(readlink -f "$0"))"
+readonly SCRIPT_PATH="$(readlink -f "$0")"
+readonly SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 readonly MPV_CONF="$SCRIPT_DIR/mpv.conf"
 readonly ITM_CONF="$SCRIPT_DIR/inversetonemapping.conf"
 readonly WALLPAPER_KWINRULE="$SCRIPT_DIR/wallpaper.kwinrule"
+readonly INSTALL_DIR="$HOME/.local/bin/hdr"
+if [[ ! -s "$INSTALL_DIR" ]]; then
+	ln -s "$SCRIPT_PATH" "$INSTALL_DIR"
+	chmod +x "$INSTALL_DIR"
+	printf "Script can now be called with name hdr from \$PATH!\n"
+fi
 
 readonly MEDIA_SYMLINK="/tmp/HDRpaper"
 readonly SOCKET="/tmp/HDRsocket"
@@ -85,6 +92,7 @@ function waitsocket {
 function rand {
 	od -An -N2 -i /dev/urandom | awk "{print (\$1 % 65536)/65535 }"
 }
+
 
 #|system level rules:
 #|/etc/xdg/kwinrulesrc
