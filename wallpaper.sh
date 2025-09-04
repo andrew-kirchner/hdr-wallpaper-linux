@@ -4,6 +4,7 @@ declare -a DEFAULT_PATHS=("$HOME/Videos" "$HOME/Pictures/pikmin")
 readonly SCRIPT_DIR="$(dirname $(readlink -f "$0"))"
 readonly MPV_CONF="$SCRIPT_DIR/mpv.conf"
 readonly ITM_CONF="$SCRIPT_DIR/inversetonemapping.conf"
+readonly WALLPAPER_KWINRULE="$SCRIPT_DIR/wallpaper.kwinrule"
 
 readonly MEDIA_SYMLINK="/tmp/HDRpaper"
 readonly SOCKET="/tmp/HDRsocket"
@@ -85,7 +86,65 @@ function rand {
 	od -An -N2 -i /dev/urandom | awk "{print (\$1 % 65536)/65535 }"
 }
 
-SUBCOMMANDS="HELP,H,QUIT,Q,SKIP,S,REPEAT,R,OSD,O,ITM"
+#|system level rules:
+#|/etc/xdg/kwinrulesrc
+#|personal rules
+#|~.config/kwinrulesrc
+function applykdewindowrule {
+	local FILE_KWINRULE="$1"
+	local RULE_NAME="$(grep -Po "(?<=\[).+?(?=\])" "$FILE_KWINRULE")"
+	if [[ "$RULE_NAME" == *$'\n'* ]]; then
+		throw "config error" "$FILE_KWINRULE has multiple groups!"
+		return 1
+	fi
+	if [[ ! -f "$HOME/.config/kwinrulesrc" ]]; then
+		printf "\e[1mApplying KDE window rules!\e[0m
+Check window rules in plasma settings\n"
+		#|if the users config file doesnt exist,
+		#|the system level rules won't be referenced there
+		#|so we need to get them manually then add it back
+		local -i SYSTEM_LEVEL_COUNT=$(
+			kreadconfig6 --file /etc/xdg/kwinrulesrc --group General --key count
+		)
+		local SYSTEM_LEVEL_RULES="$( # comma separated list
+			kreadconfig6 --file /etc/xdg/kwinrulesrc --group General --key rules
+		)"
+		cp "$FILE_KWINRULE" "$HOME/.config/kwinrulesrc"
+		#|for some reason if you set a key that isnt there
+		#|yet in the config to 1 it just doesnt work
+		kwriteconfig6 --file kwinrulesrc --group General --key count bugplaceholder
+		kwriteconfig6 --file kwinrulesrc --group General \
+			--key count $((SYSTEM_LEVEL_COUNT + 1))
+		kwriteconfig6 --file kwinrulesrc --group General \
+			--key rules "${SYSTEM_LEVEL_RULES:+$SYSTEM_LEVEL_RULES,}HDRpaper"
+		qdbus org.kde.KWin /KWin reconfigure
+		return 0
+	fi
+	local WINDOW_RULES="$(
+		kreadconfig6 --file kwinrulesrc --group General --key rules
+	)"
+	if [[ "$WINDOW_RULES" =~ (^|,)HDRpaper(,|$) ]]; then
+		# wallpaper rule is already there
+		return 0
+	fi
+	printf "\e[1mApplying new KDE window rule class \e[0m
+on top of possible system level rules and personal rules!
+You can see all types of rules in plasma settings.\n"
+	local -i WINDOW_COUNT="$(
+		kreadconfig6 --file kwinrulesrc --group General --key count
+	)"
+	echo >> "$HOME/.config/kwinrulesrc" # add newline
+	cat "$WALLPAPER_KWINRULE" >> "$HOME/.config/kwinrulesrc"
+	kwriteconfig6 --file kwinrulesrc --group General --key count bugplaceholder
+	kwriteconfig6 --file kwinrulesrc --group General \
+		--key count $((WINDOW_COUNT + 1))
+	kwriteconfig6 --file kwinrulesrc --group General \
+		--key rules "${WINDOW_RULES:+$WINDOW_RULES,}HDRpaper"
+	qdbus org.kde.KWin /KWin reconfigure
+}
+applykdewindowrule "$WALLPAPER_KWINRULE"
+
+SUBCOMMANDS="HELP,H,QUIT,Q,SKIP,S,REPEAT,R,OSD,O,AUDIO,A,ITM"
 unset subcommand
 if [[ -v 1 ]]; then
 	if [[ ",$SUBCOMMANDS," == *",${1^^},"* ]]; then
@@ -106,7 +165,7 @@ function parseoptions {
 	[[ "$?" != 0  ]] && ! tty --quiet && throw "Argument error!" \
 	"Invalid argument was supplied without a terminal!"
 
-	local -r GETOPT="$1"
+	local GETOPT="$1"
 	#|I have not found a practical use for new lines here,
 	#|so for now it is cleaner and more secure to ban them
 	#|you can still put newlines inbetween your flags and
@@ -125,7 +184,7 @@ function parseoptions {
 		sanitized="${sanitized/"$quote"/"$redaction"}"
 	done < <(grep -Po "'.*?'(?!\\\'')" <<< "$GETOPT")
 
-	local -r SHORTLONG=$(grep -Po -- "^.*?(?= --(?:$| X))" <<< "$sanitized")
+	local SHORTLONG=$(grep -Po -- "^.*?(?= --(?:$| X))" <<< "$sanitized")
 
 	if grep -Pq -- " (-+[a-z-]+).*\1" <<< "$SHORTLONG"; then
 		throw "Parsing error" "No duplicate options!"
@@ -223,6 +282,10 @@ if [[ -v subcommand ]]; then
 			socat - "$SOCKET" <<< \
 			'{command=["cycle-values","osc","yes","no"]}'
 		;;
+		audio|a)
+			socat - "$SOCKET" <<< \
+			'{command=["set_property","audio","auto"]}'
+		;;
 		itm)
 			#|debugging only, to see what the itm does with reference
 			#|be careful using this when switching between SDR and HDR files!
@@ -232,8 +295,6 @@ if [[ -v subcommand ]]; then
 			'{command=["cycle-values","target-prim","auto","bt.2020"]}'
 			socat - "$SOCKET" <<< \
 			'{command=["cycle-values","target-trc","auto","pq"]}'
-			socat - "$SOCKET" <<< \
-			'{command=["cycle-values","target-peak","auto","480"]}'
 			socat - "$SOCKET" <<< \
 			'{command=["cycle-values","inverse-tone-mapping","yes","no"]}'
 		;;
