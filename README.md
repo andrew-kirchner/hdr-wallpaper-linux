@@ -35,5 +35,15 @@ a symbolic link in ~/.local/bin so you can run the script anytime with the comma
 You can also start it quickly in Krunner with `Alt+space`; before you do that, though, you should just run it in
 a terminal emulator like Konsole just to get your configuration and any output/errors down.
 *Make sure to do `hdr --help` in the terminal if--or before--you are lost!* You can do `hdr q` or Q or quit or QUIT to get out any time.
+### Plasma 6.4 HDR Calibration
+&nbsp;&nbsp;&nbsp;&nbsp;This tool is useful to know what your monitor is actually capable of.
+Once you figure out your peak brightness **you should set it manually as target-peak in mpv.conf**.
+You can artifically raise or lower this value a bit, though setting it too high will ironically darken most scenes!
+### So Where do I Actually get HDR Wallpapers?
+&nbsp;&nbsp;&nbsp;&nbsp;This part is a bit difficult, as most 'HDR' pictures online are not actually in hdr formats which are still very inconsistent.
+Videos are ironically easier, and you can get a lot of high quality ones from [4kmedia.org](https://4kmedia.org) specifically with the tags HDR and 10 bit.
+SDR media will still look nice with this script, and I personally use content from
+(Unsplash)[https://unsplash.com] and the (official Pikmin wallpapers)[https://www.nintendo.com/jp/character/pikmin/gallery/index.html];
+these look quite nice with SDR to HDR inverse tone mapping. Avoid Youtube if possible and its compression.
 ## Command Line options
 look here later just do hdr HELP though
