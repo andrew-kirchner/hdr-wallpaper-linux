@@ -6,11 +6,27 @@ readonly SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 readonly MPV_CONF="$SCRIPT_DIR/mpv.conf"
 readonly ITM_CONF="$SCRIPT_DIR/inversetonemapping.conf"
 readonly WALLPAPER_KWINRULE="$SCRIPT_DIR/wallpaper.kwinrule"
-readonly INSTALL_DIR="$HOME/.local/bin/hdr"
-if [[ ! -s "$INSTALL_DIR" ]]; then
-	ln -s "$SCRIPT_PATH" "$INSTALL_DIR"
-	chmod +x "$INSTALL_DIR"
-	printf "Script can now be called with name hdr from \$PATH!\n"
+readonly INSTALL_NAME="hdr"
+readonly INSTALL_DIR="$HOME/.local/bin"
+if ! command -v mpv >/dev/null; then
+	printf "The program \e[1mmpv\e[0m was not found in \$PATH!
+If it is installed as a flatpak, you need
+to either reinstall it or make an alias to
+\e[1mflatpak run io.mpv.Mpv\e[0m in your terminal.\n"
+	exit 1
+fi
+if ! command -v socat >/dev/null; then
+	printf "The program \e[1msocat\e[0m is not installed!
+Install it with your package manager, if you are using
+an immutable distribution like NixOS or Bazzite this should
+probably be installed anyways but you must circumvent this\n"
+	exit 1
+fi
+if [[ ! -s "$INSTALL_DIR/$INSTALL_NAME" ]]; then
+	mkdir -p "$INSTALL_DIR"
+	ln -s "$SCRIPT_PATH" "$INSTALL_DIR/$INSTALL_NAME"
+	chmod +x "$INSTALL_DIR/$INSTALL_NAME"
+	printf "Script can now be called with name $INSTALL_NAME from \$PATH!\n"
 fi
 
 readonly MEDIA_SYMLINK="/tmp/HDRpaper"
@@ -135,6 +151,9 @@ Check window rules in plasma settings\n"
 			--key count $((SYSTEM_LEVEL_COUNT + 1))
 		kwriteconfig6 --file kwinrulesrc --group General \
 			--key rules "${SYSTEM_LEVEL_RULES:+$SYSTEM_LEVEL_RULES,}HDRpaper"
+		if ! command -v qdbus >/dev/null; then
+			throw "kwin error" "qdbus is missing! go apply window rule manually"
+		fi
 		qdbus org.kde.KWin /KWin reconfigure
 		return 0
 	fi
@@ -160,6 +179,13 @@ You can see all types of rules in plasma settings.\n"
 		--key rules "${WINDOW_RULES:+$WINDOW_RULES,}HDRpaper"
 	qdbus org.kde.KWin /KWin reconfigure
 }
+
+if ! command -v kwriteconfig6 >/dev/null; then
+	printf "kwriteconfig6 not found! It seems you are not on Plasma,
+the script itself will run normally but you must (for now)
+add your own window rule equivalent in settings or a plugin
+to put mpv in the background and prevent user input\n"
+fi
 applykdewindowrule "$WALLPAPER_KWINRULE"
 
 SUBCOMMANDS="HELP,H,QUIT,Q,SKIP,S,REPEAT,R,OSD,O,AUDIO,A,ITM,I"
