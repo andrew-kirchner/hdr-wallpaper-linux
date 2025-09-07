@@ -2,6 +2,7 @@
 Description=HDRpaper
 acceptfocusrule=2
 desktops=\\0
+desktopsrule=2
 fsplevel=4
 fsplevelrule=2
 layer=below
