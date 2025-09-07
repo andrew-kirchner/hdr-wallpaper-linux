@@ -43,7 +43,7 @@ You can artifically raise or lower this value a bit, though setting it too high 
 &nbsp;&nbsp;&nbsp;&nbsp;This part is a bit difficult, as most 'HDR' pictures online are not actually in hdr formats which are still very inconsistent.
 Videos are ironically easier, and you can get a lot of high quality ones from [4kmedia.org](https://4kmedia.org) specifically with the tags HDR and 10 bit.
 SDR media will still look nice with this script, and I personally use content from
-(Unsplash)[https://unsplash.com] and the (official Pikmin wallpapers)[https://www.nintendo.com/jp/character/pikmin/gallery/index.html];
+[Unsplash](https://unsplash.com) and the [official Pikmin wallpapers](https://www.nintendo.com/jp/character/pikmin/gallery/index.html);
 these look quite nice with SDR to HDR inverse tone mapping. Avoid Youtube if possible and its compression.
 ## Command Line options
 look here later just do hdr HELP though
