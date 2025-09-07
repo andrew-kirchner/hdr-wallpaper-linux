@@ -185,8 +185,9 @@ if ! command -v kwriteconfig6 >/dev/null; then
 the script itself will run normally but you must (for now)
 add your own window rule equivalent in settings or a plugin
 to put mpv in the background and prevent user input\n"
+else
+	applykdewindowrule "$WALLPAPER_KWINRULE"
 fi
-applykdewindowrule "$WALLPAPER_KWINRULE"
 
 SUBCOMMANDS="HELP,H,QUIT,Q,SKIP,S,REPEAT,R,OSD,O,AUDIO,A,ITM,I"
 unset subcommand
@@ -569,7 +570,7 @@ if pkill -f "mpv --title=wallpaper-mpv"; then
 	sleep 1
 fi
 
-mpv --title="wallpaper-mpv" --input-ipc-server="$SOCKET" \
+mpv --title=wallpaper-mpv --input-ipc-server="$SOCKET" \
 	--include="$MPV_CONF" ${preset_options[@]} -- &
 if ! waitsocket "$SOCKET"; then
 	throw "Socket error" "MPV's socket failed to open!"
