@@ -45,5 +45,9 @@ Videos are ironically easier, and you can get a lot of high quality ones from [4
 SDR media will still look nice with this script, and I personally use content from
 [Unsplash](https://unsplash.com) and the [official Pikmin wallpapers](https://www.nintendo.com/jp/character/pikmin/gallery/index.html);
 these look quite nice with SDR to HDR inverse tone mapping. Avoid Youtube if possible and its compression.
+
+...you can also torrent, which is mostly legal but consider reaching out to cool creators like
+[Roman De Giuli](https://terracollage.com)
+[Eugene Belsky](https://artvision.camera)
 ## Command Line options
 look here later just do hdr HELP though
