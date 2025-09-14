@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-declare -a DEFAULT_PATHS=("$HOME/Videos" "$HOME/Pictures/pikmin")
+declare -a DEFAULT_PATHS=("$(xdg-user-dir PICTURES)" "$(xdg-user-dir VIDEOS)")
 readonly SCRIPT_PATH="$(readlink -f "$0")"
 readonly SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 readonly MPV_CONF="$SCRIPT_DIR/mpv.conf"
@@ -8,6 +8,14 @@ readonly ITM_CONF="$SCRIPT_DIR/inversetonemapping.conf"
 readonly WALLPAPER_KWINRULE="$SCRIPT_DIR/wallpaper.kwinrule"
 readonly INSTALL_NAME="hdr"
 readonly INSTALL_DIR="$HOME/.local/bin"
+readonly LOG_FILE="$(xdg-user-dir VIDEOS)/playhistory.log"
+readonly MEDIA_SYMLINK="/tmp/HDRpaper"
+readonly SOCKET="/tmp/HDRsocket"
+if ! tty --quiet; then
+	#|log stdout/err when there is no terminal
+	#|like from startup, shortcut, krunner
+	exec > >(tee "$LOG_FILE") 2>&1
+fi
 if ! command -v mpv >/dev/null; then
 	printf "The program \e[1mmpv\e[0m was not found in \$PATH!
 If it is installed as a flatpak, you need
@@ -28,9 +36,6 @@ if [[ ! -s "$INSTALL_DIR/$INSTALL_NAME" ]]; then
 	chmod +x "$INSTALL_DIR/$INSTALL_NAME"
 	printf "Script can now be called with name $INSTALL_NAME from \$PATH!\n"
 fi
-
-readonly MEDIA_SYMLINK="/tmp/HDRpaper"
-readonly SOCKET="/tmp/HDRsocket"
 
 function helptext {
 	printf \
@@ -90,13 +95,11 @@ These options require a value and are only passed on a new instance.
 \e[0m
 Repository page: <https://gitlab.com/andrewkirchner/HDRpaper>\n"
 }
-
 function throw {
 	notify-send "$1" "$2" -a "HDRpaper error"
 	printf "\e[31m%s\e[0m %s\n" "[$1]" "$2" >&2
 	exit 1
 }
-
 function waitsocket {
 	local path="$1"
 	local -i slumber=1
@@ -114,7 +117,6 @@ function waitsocket {
 	done
 	return 0
 }
-
 function rand {
 	od -An -N2 -i /dev/urandom | awk "{print (\$1 % 65536)/65535 }"
 }
@@ -179,7 +181,6 @@ You can see all types of rules in plasma settings.\n"
 		--key rules "${WINDOW_RULES:+$WINDOW_RULES,}HDRpaper"
 	qdbus org.kde.KWin /KWin reconfigure
 }
-
 if ! command -v kwriteconfig6 >/dev/null; then
 	printf "kwriteconfig6 not found! It seems you are not on Plasma,
 the script itself will run normally but you must (for now)
@@ -189,6 +190,7 @@ else
 	applykdewindowrule "$WALLPAPER_KWINRULE"
 fi
 
+
 SUBCOMMANDS="HELP,H,QUIT,Q,SKIP,S,REPEAT,R,OSD,O,AUDIO,A,ITM,I"
 unset subcommand
 if [[ -v 1 ]]; then
@@ -197,7 +199,6 @@ if [[ -v 1 ]]; then
 		shift
 	fi
 fi
-
 #|modular option parser
 #|fun learning exercise :)
 #|would be in a separate file if this was a larger script
@@ -276,7 +277,6 @@ function parseoptions {
 		POSITIONALS+=("$value")
 	done < <(grep -Pob -- "X+(?!.*? --(?:$| ))" <<< "$sanitized")
 }
-
 readonly SHORTOPTIONS="hls:i:"
 readonly LONGOPTIONS=\
 "help,loop,no-config,only-images,only-videos,sort:,itm:"
@@ -284,6 +284,8 @@ parseoptions "$(getopt -o "$SHORTOPTIONS" -l "$LONGOPTIONS" -- "$@")"
 # declare -p FLAGS
 # declare -p OPTARG_MAP
 # declare -p POSITIONALS
+
+
 function isflagpresent {
 	local longhand="$1"
 	local shorthand="${2:-}"
@@ -293,7 +295,6 @@ if isflagpresent help h; then
 	helptext
 	exit 0
 fi
-
 if [[ -v subcommand ]]; then
 	case "$subcommand" in
 		help|h)
@@ -346,7 +347,6 @@ if [[ -v subcommand ]]; then
 	esac
 	exit 0
 fi
-
 declare -a preset_options=()
 unset FORCE_LOOP ONLY_IMAGES ONLY_VIDEOS
 if isflagpresent loop l; then
@@ -362,11 +362,9 @@ fi
 if isflagpresent only-videos; then
 	readonly ONLY_VIDEOS=0
 fi
-
 if [[ ! -v POSITIONALS ]]; then
 	POSITIONALS=("${DEFAULT_PATHS[@]}")
 fi
-
 function getOPTARG {
 	local longhand="$1"
 	local regex="$2"
@@ -390,6 +388,7 @@ SORT_METHOD="$(
 	getOPTARG sort "proportional|random|randarg|alphabetical|newest|none" s
 )"
 SORT_METHOD="${SORT_METHOD:-proportional}"
+
 
 declare -a WALLPAPER_PATHS=()
 declare -A IMAGE_MAP=()
@@ -528,7 +527,6 @@ function pickrandom {
 	local -i random=$(shuf -n 1 -i 0-$RANGE)
 	echo "${WALLPAPER_PATHS[$random]}"
 }
-
 if [[ "$SORT_METHOD" == proportional && ${#VIDEO_MAP[@]} -eq 0 ]]; then
 	# no videos so dont worry about probing them
 	SORT_METHOD=random
@@ -556,6 +554,7 @@ if [[ -v FORCE_LOOP ]]; then
 indefinitely until SKIP is called!"
 fi
 
+
 function cleanup {
 	rm -f "$MEDIA_SYMLINK"
 	rm -f "$SOCKET"
@@ -569,7 +568,6 @@ if pkill -f "mpv --title=wallpaper-mpv"; then
 	printf "Closed previous instance of this script!\n"
 	sleep 1
 fi
-
 mpv --title=wallpaper-mpv --input-ipc-server="$SOCKET" \
 	--include="$MPV_CONF" ${preset_options[@]} -- &
 if ! waitsocket "$SOCKET"; then
@@ -586,17 +584,16 @@ case "$(getOPTARG itm "all|image|video|none" i)" in
 		'{command=["set_property","user-data/noimage",true]}'
 	;;
 esac
-
 #|open one socat instance that sends and receives
 #|messages with its own file descriptors; compare to
 #|socat pty,raw,echo=0,link="$SOCAT_PTY" UNIX-CONNECT:"$SOCKET" &
 #|waitpath... exec 3<>"$SOCAT_PTY"
 coproc IPC { socat UNIX-CONNECT:"$SOCKET" - ; }
-
 #|use to detect no more media files to play
 #|accounts for when more files are queued like
 #|with REPEAT, LOOP, or --drag-and-drop=append
 echo '{command=["observe_property",1,"playlist-pos"]}' >&${IPC[1]}
+
 
 # https://mpv.io/manual/master/#list-of-input-commands
 # https://mpv.io/manual/master/#json-ipc
@@ -608,10 +605,8 @@ function plaympv {
 	printf "\e[36m%s\e[0m\n" "MPV is playing ${wallpaper/#"$HOME"/"~"}"
 	echo "{command=[\"loadfile\",\"$MEDIA_SYMLINK\"]}" >&${IPC[1]}
 }
-
 declare -a path_history=()
-declare -i HISTORY_LENGTH=4
-
+declare -i HISTORY_LENGTH=6
 while read -r event <&${IPC[0]}; do
 	# use simple matching to avoid jq dependency
 	case "$event" in
