@@ -9,8 +9,7 @@ readonly WALLPAPER_KWINRULE="$SCRIPT_DIR/wallpaper.kwinrule"
 readonly INSTALL_NAME="hdr"
 readonly INSTALL_DIR="$HOME/.local/bin"
 readonly LOG_FILE="$(xdg-user-dir VIDEOS)/playhistory.log"
-readonly MEDIA_SYMLINK="/tmp/HDRpaper"
-readonly SOCKET="/tmp/HDRsocket"
+readonly SOCKET="/tmp/wallpapermpvsocket"
 if ! tty --quiet; then
 	#|log stdout/err when there is no terminal
 	#|like from startup, shortcut, krunner
@@ -32,7 +31,7 @@ probably be installed anyways but you must circumvent this\n"
 fi
 if [[ ! -s "$INSTALL_DIR/$INSTALL_NAME" ]]; then
 	mkdir -p "$INSTALL_DIR"
-	ln -s "$SCRIPT_PATH" "$INSTALL_DIR/$INSTALL_NAME"
+	ln -sr "$SCRIPT_PATH" "$INSTALL_DIR/$INSTALL_NAME"
 	chmod +x "$INSTALL_DIR/$INSTALL_NAME"
 	printf "Script can now be called with name $INSTALL_NAME from \$PATH!\n"
 fi
@@ -555,8 +554,9 @@ indefinitely until SKIP is called!"
 fi
 
 
+last_symlink=""
 function cleanup {
-	rm -f "$MEDIA_SYMLINK"
+	rm -f "$last_symlink"
 	rm -f "$SOCKET"
 	pkill -f "mpv --title=wallpaper-mpv" || true
 	# make cursor visible after mpv messes with it
@@ -598,12 +598,19 @@ echo '{command=["observe_property",1,"playlist-pos"]}' >&${IPC[1]}
 # https://mpv.io/manual/master/#list-of-input-commands
 # https://mpv.io/manual/master/#json-ipc
 function plaympv {
+	echo "$(basename $1)"
 	local wallpaper="$1"
 	# use symlink to avoid json parsing/jq dependency
-	rm -f "$MEDIA_SYMLINK"
-	ln -sr "$wallpaper" "$MEDIA_SYMLINK"
+	rm -f "$last_symlink"
+	local readable_symlink="Wallpaper:  $(
+		grep -Po "[\w .,:;?!&*-]+" <<<\
+		"$(basename "$wallpaper")" | paste -s -d ""
+	)"
+	echo "$readable_symlink"
+	last_symlink="$readable_symlink"
+	ln -sr "$wallpaper" "$readable_symlink"
 	printf "\e[36m%s\e[0m\n" "MPV is playing ${wallpaper/#"$HOME"/"~"}"
-	echo "{command=[\"loadfile\",\"$MEDIA_SYMLINK\"]}" >&${IPC[1]}
+	echo "{command=[\"loadfile\",\"$readable_symlink\"]}" >&${IPC[1]}
 }
 declare -a path_history=()
 declare -i HISTORY_LENGTH=6
