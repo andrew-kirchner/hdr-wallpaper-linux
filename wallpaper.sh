@@ -257,18 +257,21 @@ while read -r -d $'\0' path; do
 			if [[ -v ONLY_IMAGES ]]; then continue; fi
 			WALLPAPER_PATHS+=("$path")
 			VIDEO_MAP["$path"]=0
+			echo "hi"
 		;;
 	esac
 done < <(find "${POSITIONALS[@]}" -type f -print0)
 unset path
 unset mime_type
+
+
 if [[ ! -v WALLPAPER_PATHS ]]; then
 	throw "Argument Error" "No valid media paths supplied!"
 fi
-if [[ "$sort_method" == proportional && ${#VIDEO_MAP[@]} -eq 0 ]]; then
-	#|if there are no videos then there is
-	#|no point in finding relative duration
-	sort_method=random
+if [[ -v FORCE_LOOP ]]; then
+	printf "\e[34m%s\e[0m\n" \
+"${#IMAGE_MAP[@]} images and ${#VIDEO_MAP[@]} videos will play
+indefinitely until SKIP is called!"
 fi
 
 unset AVERAGE_DURATION
@@ -305,9 +308,6 @@ function probepositionals {
 		total_weight="$(
 			awk "BEGIN{print $total_weight+$inverse_weight}"
 		)"
-
-		path="${response% $duration}"
-		WALLPAPER_PATHS+=("$path")
 		#|its not done yet it needs to be normalized
 		#|which is done in the next loop
 		VIDEO_MAP["$path"]="$inverse_weight"
@@ -391,6 +391,11 @@ function pickrandom {
 	echo "${WALLPAPER_PATHS[$random]}"
 }
 
+if [[ "$sort_method" == proportional && ${#VIDEO_MAP[@]} -eq 0 ]]; then
+	#|if there are no videos then there is
+	#|no point in finding relative duration
+	sort_method=random
+fi
 case "$sort_method" in
 	proportional)
 		probepositionals
@@ -410,18 +415,10 @@ $AVERAGE_DURATION seconds on average, the mean of ${#VIDEO_MAP[@]} videos passed
 	;;
 	*) throw "unimplemented --sort" "$sort_method";;
 esac
-if [[ -v FORCE_LOOP ]]; then
-	printf "\e[34m%s\e[0m\n" \
-"${#IMAGE_MAP[@]} images and ${#VIDEO_MAP[@]} videos will play
-indefinitely until SKIP is called!"
-fi
 
 function cleanup {
 	rm -f "$SOCKET"
 	pkill -f "mpv --title=wallpaper-mpv" || true
-	# make cursor visible after mpv messes with it
-	tput cnorm
-	printf "\e[1;34m%s\e[0m\n" "Script and MPV closed!"
 	exit 0
 }; trap cleanup EXIT
 if pkill -f "mpv --title=wallpaper-mpv"; then
@@ -496,6 +493,7 @@ while read -r event <&${IPC[0]}; do
 		*) continue;;
 	esac
 
+# 	for i in "${!VIDEO_MAP[@]}"; do echo "$i"; done
 	if (( ${#WALLPAPER_PATHS[@]} <= HISTORY_LENGTH )); then
 		plaympv "$(pickpickcarrotmethod)"
 		continue
@@ -510,4 +508,3 @@ while read -r event <&${IPC[0]}; do
 	fi
 	plaympv "$next_file"
 done
-stty echo
