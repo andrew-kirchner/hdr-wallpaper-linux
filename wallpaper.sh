@@ -334,30 +334,38 @@ function probevideo {
 	done
 	printf "$index $duration\n" >&3
 }
+
 function weighvideos {
-	#|a bit slow to call awk a lot
-	#|but simplest while avoiding
-	#|having to pass path strings
-	local duration inverse
-	local total="0.0"
+	local duration
+	local awk_durations=""
+	#|abstract weird path string away
+	#|from awk so there can be just 1 awk call
+	declare -a ordered_videos=()
 	for video in "${!VIDEO_MAP[@]}"; do
+		ordered_videos+=("$video")
 		duration="${VIDEO_MAP["$video"]}"
-		inverse="$(
-			awk "BEGIN{print 1 / $duration}"
-		)"
-		VIDEO_MAP["$video"]="$inverse"
-		total="$(
-			awk "BEGIN{print $total + $inverse}"
-		)"
+		awk_durations+=$duration+$'\n'
 	done
-	local normalized
-	for video in "${!VIDEO_MAP[@]}"; do
-		inverse="${VIDEO_MAP["$video"]}"
-		normalized="$(
-			awk "BEGIN{print $inverse/$total}"
-		)"
-		VIDEO_MAP["$video"]="$normalized"
-	done
+	local normalized_weights="$(awk '
+		BEGIN { total = 0.0; }
+		{
+			#|NR starts at 1 but awk arrays
+			#|are associative so whatever
+			inverse_durations[NR] = 1 / $1;
+			total += inverse_durations[NR];
+		}
+		END {
+			for (i = 1; i <= NR; i++) {
+				normalized = inverse_durations[i] / total;
+				printf "%.10f\n", normalized
+			}
+		}
+	' <<< "${awk_durations%$'\n'}")"
+	local -i index=0
+	while read normalized; do
+		VIDEO_MAP["${ordered_videos[$index]}"]="$normalized"
+		index=$((index + 1))
+	done <<< "$normalized_weights"
 }
 
 
@@ -516,7 +524,6 @@ while read -r event <&${IPC[0]}; do
 		*) continue;;
 	esac
 
-# 	plaympv "$(pickrandom)"; continue
 	if (( ${#WALLPAPER_PATHS[@]} <= HISTORY_LENGTH )); then
 		plaympv "$(pickpickcarrotmethod)"
 		continue
