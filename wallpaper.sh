@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# set -x to see everything
 shopt -s extglob
 
 readonly SCRIPT_PATH="$(readlink -f "$0")"
@@ -121,14 +122,9 @@ function rand {
 	od -An -N2 -i /dev/urandom | awk "{print (\$1 % 65536)/65535 }"
 }
 
-
-
-
 applykdewindowrule "$WALLPAPER_KWINRULE"
-# declare -p FLAGS
-# declare -p OPTARG_MAP
-# declare -p POSITIONALS
 
+# BEGIN
 SUBCOMMANDS="HELP,H,QUIT,Q,SKIP,S,REPEAT,R,OSD,O,AUDIO,A,ITM,I"
 unset subcommand
 if [[ -v 1 ]]; then
@@ -138,7 +134,6 @@ if [[ -v 1 ]]; then
 	fi
 fi
 
-
 readonly SHORTOPTIONS="hlts:"
 readonly LONGOPTIONS=\
 "help,loop,toast,no-config,only-images,only-videos,sort:,itm:"
@@ -147,7 +142,9 @@ if [[ $? != 0 ]] && ! tty --quiet; then
 	throw "getopt Error!" "Invalid parameters, run in terminal!"
 fi
 parseoptions "$raw_getopt"
-
+# declare -p FLAGS
+# declare -p OPTARG_MAP
+# declare -p POSITIONALS
 
 if isflagpresent help h; then
 	helptext
@@ -232,8 +229,9 @@ sort_method="${sort_method:-proportional}"
 if [[ ! -v POSITIONALS ]]; then
 	POSITIONALS=("${DEFAULT_PATHS[@]}")
 fi
+# END
 
-
+# BEGIN
 # put all media in one array regardless of relative location
 declare -a WALLPAPER_PATHS=()
 declare -A IMAGE_MAP=()
@@ -257,7 +255,6 @@ while read -r -d $'\0' path; do
 			if [[ -v ONLY_IMAGES ]]; then continue; fi
 			WALLPAPER_PATHS+=("$path")
 			VIDEO_MAP["$path"]=0
-			echo "hi"
 		;;
 	esac
 done < <(find "${POSITIONALS[@]}" -type f -print0)
@@ -273,12 +270,11 @@ if [[ -v FORCE_LOOP ]]; then
 "${#IMAGE_MAP[@]} images and ${#VIDEO_MAP[@]} videos will play
 indefinitely until SKIP is called!"
 fi
+# END
 
-unset AVERAGE_DURATION
+unset AVERAGE_DURATION TOTAL_DURATION
 #|complex, asynchronously calls and aggregates
-#|ffprobe on every video; currently just used
-#|to find the average video duration
-#|and normalized inverse distribution
+#|ffprobe on every video
 function probepositionals {
 	coproc RELAY {
 		while read line; do
@@ -294,23 +290,17 @@ function probepositionals {
 	local -i videos_remaining="${#VIDEO_MAP[@]}"
 	local response
 	local duration
+	local -i path_index
 	local total_duration="0.0"
-	local inverse_weight
-	local total_weight="0.0"
 	while read -t 5 response <&"${RELAY[0]}"; do
+		# coproc sends in format "index duration"
 		duration="$(grep -Po "[\d.]+$" <<< "$response")"
+		path_index="$(grep -Po "^\d+" <<< "$response")"
+		path="${WALLPAPER_PATHS[$path_index]}"
+		VIDEO_MAP["$path"]="$duration"
 		total_duration="$(
 			awk "BEGIN{print $total_duration+$duration}"
 		)"
-		inverse_weight="$(
-			awk "BEGIN{print 1/$duration}"
-		)"
-		total_weight="$(
-			awk "BEGIN{print $total_weight+$inverse_weight}"
-		)"
-		#|its not done yet it needs to be normalized
-		#|which is done in the next loop
-		VIDEO_MAP["$path"]="$inverse_weight"
 		if (( --videos_remaining == 0 )); then
 			local SUCCESS=0
 			break
@@ -319,15 +309,7 @@ function probepositionals {
 	if [[ ! -v SUCCESS ]]; then
 		throw "Timeout error" "ffprobe failed! check terminal or try --sort=random"
 	fi
-	local probability
-	local normalized_weight
-	for path in "${!VIDEO_MAP[@]}"; do
-		normalized_weight="${VIDEO_MAP["$path"]}"
-		probability="$(
-			awk "BEGIN{print $normalized_weight/$total_weight}"
-		)"
-		VIDEO_MAP["$path"]="$probability"
-	done
+	declare -g TOTAL_DURATION="$total_duration"
 	declare -g AVERAGE_DURATION="$(
 		awk "BEGIN{print $total_duration/${#VIDEO_MAP[@]}}"
 	)"
@@ -340,8 +322,45 @@ function probevideo {
 		-of csv="p=0" \
 		"$video"
 	)"
-	printf "%s %s\n" "$video" "$duration" >&3
+	#|inefficient but simple way to
+	#|pack the path without escaping filename
+	local -i index=-1
+	for path in "${WALLPAPER_PATHS[@]}"; do
+		index="$((index + 1))"
+ 		#((index++)) is buggy
+		if [[ "$path" == "$video" ]]; then
+			break
+		fi
+	done
+	printf "$index $duration\n" >&3
 }
+function weighvideos {
+	#|a bit slow to call awk a lot
+	#|but simplest while avoiding
+	#|having to pass path strings
+	local duration inverse
+	local total="0.0"
+	for video in "${!VIDEO_MAP[@]}"; do
+		duration="${VIDEO_MAP["$video"]}"
+		inverse="$(
+			awk "BEGIN{print 1 / $duration}"
+		)"
+		VIDEO_MAP["$video"]="$inverse"
+		total="$(
+			awk "BEGIN{print $total + $inverse}"
+		)"
+	done
+	local normalized
+	for video in "${!VIDEO_MAP[@]}"; do
+		inverse="${VIDEO_MAP["$video"]}"
+		normalized="$(
+			awk "BEGIN{print $inverse/$total}"
+		)"
+		VIDEO_MAP["$video"]="$normalized"
+	done
+}
+
+
 
 function pickpickcarrotmethod {
 	case "$sort_method" in
@@ -386,8 +405,9 @@ function pickproportional {
 	done
 	throw "impossible" "uh oh"
 }
+
 function pickrandom {
-	local -i random=$(shuf -n 1 -i 0-$RANGE)
+	local -i random=$(shuf -n 1 -i 0-$((${#WALLPAPER_PATHS[@]}-1)))
 	echo "${WALLPAPER_PATHS[$random]}"
 }
 
@@ -399,6 +419,7 @@ fi
 case "$sort_method" in
 	proportional)
 		probepositionals
+		weighvideos
 		if [[ ! -v FORCE_LOOP && ${#IMAGE_MAP[@]} -ne 0 ]]; then
 			preset_options+=("--image-display-duration=$AVERAGE_DURATION")
 			printf "\e[34m%s\e[0m\n" \
@@ -416,6 +437,7 @@ $AVERAGE_DURATION seconds on average, the mean of ${#VIDEO_MAP[@]} videos passed
 	*) throw "unimplemented --sort" "$sort_method";;
 esac
 
+# BEGIN
 function cleanup {
 	rm -f "$SOCKET"
 	pkill -f "mpv --title=wallpaper-mpv" || true
@@ -450,6 +472,7 @@ coproc IPC { socat UNIX-CONNECT:"$SOCKET" - ; }
 #|accounts for when more files are queued like
 #|with REPEAT, LOOP, or --drag-and-drop=append
 echo '{command=["observe_property",1,"playlist-pos"]}' >&${IPC[1]}
+# END
 
 function escapejson {
 	#|avoids jq dependency, completely valid here
@@ -493,7 +516,7 @@ while read -r event <&${IPC[0]}; do
 		*) continue;;
 	esac
 
-# 	for i in "${!VIDEO_MAP[@]}"; do echo "$i"; done
+# 	plaympv "$(pickrandom)"; continue
 	if (( ${#WALLPAPER_PATHS[@]} <= HISTORY_LENGTH )); then
 		plaympv "$(pickpickcarrotmethod)"
 		continue
