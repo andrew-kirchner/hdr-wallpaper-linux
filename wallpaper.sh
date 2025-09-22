@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 shopt -s extglob
-declare -a DEFAULT_PATHS=("$(xdg-user-dir PICTURES)" "$(xdg-user-dir VIDEOS)")
+
 readonly SCRIPT_PATH="$(readlink -f "$0")"
 readonly SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+source "$SCRIPT_DIR/applykdewindowrule.sh"
+source "$SCRIPT_DIR/parseoptions.sh"
 readonly MPV_CONF="$SCRIPT_DIR/mpv.conf"
 readonly ITM_CONF="$SCRIPT_DIR/inversetonemapping.conf"
 readonly WALLPAPER_KWINRULE="$SCRIPT_DIR/wallpaper.kwinrule"
+
+
+declare -a DEFAULT_PATHS=("$(xdg-user-dir PICTURES)" "$(xdg-user-dir VIDEOS)")
 readonly INSTALL_NAME="hdr" # what to type in terminal
 readonly INSTALL_DIR="$HOME/.local/bin" # somewhere in $PATH
 readonly SOCKET="/tmp/wallpapermpvsocket"
@@ -117,74 +122,12 @@ function rand {
 }
 
 
-#|system level rules:
-#|/etc/xdg/kwinrulesrc
-#|personal rules
-#|~/.config/kwinrulesrc
-function applykdewindowrule {
-	local FILE_KWINRULE="$1"
-	local RULE_NAME="$(grep -Po "(?<=\[).+?(?=\])" "$FILE_KWINRULE")"
-	if [[ "$RULE_NAME" == *$'\n'* ]]; then
-		throw "config error" "$FILE_KWINRULE has multiple groups!"
-		return 1
-	fi
-	if [[ ! -f "$HOME/.config/kwinrulesrc" ]]; then
-		printf "\e[1mApplying KDE window rules!\e[0m
-Check window rules in plasma settings\n"
-		#|if the users config file doesnt exist,
-		#|the system level rules won't be referenced there
-		#|so we need to get them manually then add it back
-		local -i SYSTEM_LEVEL_COUNT=$(
-			kreadconfig6 --file /etc/xdg/kwinrulesrc --group General --key count
-		)
-		local SYSTEM_LEVEL_RULES="$( # comma separated list
-			kreadconfig6 --file /etc/xdg/kwinrulesrc --group General --key rules
-		)"
-		cp "$FILE_KWINRULE" "$HOME/.config/kwinrulesrc"
-		#|for some reason if you set a key that isnt there
-		#|yet in the config to 1 it just doesnt work
-		kwriteconfig6 --file kwinrulesrc --group General --key count bugplaceholder
-		kwriteconfig6 --file kwinrulesrc --group General \
-			--key count $((SYSTEM_LEVEL_COUNT + 1))
-		kwriteconfig6 --file kwinrulesrc --group General \
-			--key rules "${SYSTEM_LEVEL_RULES:+$SYSTEM_LEVEL_RULES,}HDRpaper"
-		if ! command -v qdbus >/dev/null; then
-			throw "kwin error" "qdbus is missing! go apply window rule manually"
-		fi
-		qdbus org.kde.KWin /KWin reconfigure
-		return 0
-	fi
-	local WINDOW_RULES="$(
-		kreadconfig6 --file kwinrulesrc --group General --key rules
-	)"
-	if [[ "$WINDOW_RULES" =~ (^|,)HDRpaper(,|$) ]]; then
-		# wallpaper rule is already there
-		return 0
-	fi
-	printf "\e[1mApplying new KDE window rule class \e[0m
-on top of possible system level rules and personal rules!
-You can see all types of rules in plasma settings.\n"
-	local -i WINDOW_COUNT="$(
-		kreadconfig6 --file kwinrulesrc --group General --key count
-	)"
-	echo >> "$HOME/.config/kwinrulesrc" # add newline
-	cat "$WALLPAPER_KWINRULE" >> "$HOME/.config/kwinrulesrc"
-	kwriteconfig6 --file kwinrulesrc --group General --key count bugplaceholder
-	kwriteconfig6 --file kwinrulesrc --group General \
-		--key count $((WINDOW_COUNT + 1))
-	kwriteconfig6 --file kwinrulesrc --group General \
-		--key rules "${WINDOW_RULES:+$WINDOW_RULES,}HDRpaper"
-	qdbus org.kde.KWin /KWin reconfigure
-}
-if ! command -v kwriteconfig6 >/dev/null; then
-	printf "kwriteconfig6 not found! It seems you are not on Plasma,
-the script itself will run normally but you must (for now)
-add your own window rule equivalent in settings or a plugin
-to put mpv in the background and prevent user input\n"
-else
-	applykdewindowrule "$WALLPAPER_KWINRULE"
-fi
 
+
+applykdewindowrule "$WALLPAPER_KWINRULE"
+# declare -p FLAGS
+# declare -p OPTARG_MAP
+# declare -p POSITIONALS
 
 SUBCOMMANDS="HELP,H,QUIT,Q,SKIP,S,REPEAT,R,OSD,O,AUDIO,A,ITM,I"
 unset subcommand
@@ -195,117 +138,17 @@ if [[ -v 1 ]]; then
 	fi
 fi
 
-#|modular option parser
-#|fun learning exercise :)
-#|would be in a separate file if this was a larger script
-#|try to break it i dare you
-declare -A FLAGS=()
-declare -A OPTARG_MAP=()
-declare -a POSITIONALS=()
-function parseoptions {
-	local GETOPT="$1"
-	#|I have not found a practical use for new lines here,
-	#|so for now it is cleaner and more secure to ban them
-	#|you can still put newlines inbetween your flags and
-	#|stuff to format them as getopt cleans it
-	if [[ "$GETOPT" == *$'\n'* ]]; then
-		throw "Parsing error" "Newlines are not allowed in options!"
-	fi
 
-	#|replace all quoted text with arbitrary text (crosses)
-	#|of the same length in order to further simplify regex
-	local sanitized="$GETOPT"
-	local redaction
-	local quote
-	while read -r quote; do
-		redaction=$(printf "X%.0s" $(seq 1 ${#quote}))
-		sanitized="${sanitized/"$quote"/"$redaction"}"
-	done < <(grep -Po "'.*?'(?!\\\'')" <<< "$GETOPT")
-
-	local SHORTLONG=$(grep -Po -- "^.*?(?= --(?:$| X))" <<< "$sanitized")
-
-	if grep -Pq -- " (-+[a-z-]+).*\1" <<< "$SHORTLONG"; then
-		throw "Parsing error" "No duplicate options!"
-	fi
-
-	#|iterate through both boolean flags and key value
-	#|options and assign them to their respective array/map
-	local option
-	local uptokey
-	local -i keyvalueindex
-	local key
-	local value
-	while read -r option; do
-		# I am a boolean flag
-		if [[ "$option" != *" "* ]]; then
-			FLAGS["$option"]=1
-			continue
-		fi
-		# I am an option with an argument
-		key="${option%% *}"
-		#|use substring indices to replenish crosses from
-		#|earlier with the user's option value
-		uptokey=${sanitized%%"$option"*}
-		keyvalueindex=(${#uptokey}+${#key}+2)
-		# replenish sanitizing and shave off quotes
-		value="${GETOPT:$keyvalueindex:(${#option}-${#key}-3)}"
-		value="${value//"'\\''"/"'"}"
-		OPTARG_MAP["$key"]="$value"
-	done < <(grep -Po -- " -+[a-z-]+(?: X+)?" <<< "$SHORTLONG")
-
-	# do much of the same tricks for positional arguments
-	local argument
-	local -i positional_index
-	local -i positional_length
-	local value
-	while read -r argument; do
-		#|grep outputs a number for where the match is in the string
-		#|and then the match of the crosses delimited by a colon
-		positional_index="${argument%%:*}"
-		argument="${argument##*:}"
-		positional_length="${#argument}"
-		value="${GETOPT:$positional_index+1:$positional_length-2}"
-		value="${value//"'\\''"/"'"}"
-		POSITIONALS+=("$value")
-	done < <(grep -Pob -- "X+(?!.*? --(?:$| ))" <<< "$sanitized")
-}
 readonly SHORTOPTIONS="hlts:"
 readonly LONGOPTIONS=\
 "help,loop,toast,no-config,only-images,only-videos,sort:,itm:"
 raw_getopt="$(getopt -o "$SHORTOPTIONS" -l "$LONGOPTIONS" -- "$@")"
 if [[ $? != 0 ]] && ! tty --quiet; then
-	throw "Option Error!" "Invalid parameters, run in terminal!"
+	throw "getopt Error!" "Invalid parameters, run in terminal!"
 fi
 parseoptions "$raw_getopt"
 
-function isflagpresent {
-	local longhand="$1"
-	local shorthand="${2:-}"
-	[[ -v FLAGS["--$longhand"] || -v FLAGS["-$shorthand"] ]]
-}
-function getOPTARG {
-	local longhand="$1"
-	local regex="$2"
-	local shorthand="${3:-}"
-	local optvalue="${OPTARG_MAP["--$longhand"]:-}"
-	if [[ -z "$optvalue" && -n "$shorthand" ]]; then
-		if (( ${#shorthand} == 1 )); then
-			optvalue="${OPTARG_MAP["-$shorthand"]:-}"
-		else
-			optvalue="${OPTARG_MAP["--$shorthand"]:-}"
-		fi
-	fi
-	if [[ -z "$optvalue" ]]; then
-		echo ""
-		return 0
-	fi
-	optvalue="${optvalue,,}"
-	if ! grep -Pq "$regex" <<< "$optvalue"; then
-		throw "Argument error!" \
-		"Invalid --$longhand! $optvalue"
-	fi
-	echo "$optvalue"
-}
+
 if isflagpresent help h; then
 	helptext
 	exit 0
