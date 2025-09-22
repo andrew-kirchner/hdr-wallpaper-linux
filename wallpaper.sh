@@ -1,20 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
+shopt -s extglob
 declare -a DEFAULT_PATHS=("$(xdg-user-dir PICTURES)" "$(xdg-user-dir VIDEOS)")
 readonly SCRIPT_PATH="$(readlink -f "$0")"
 readonly SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 readonly MPV_CONF="$SCRIPT_DIR/mpv.conf"
 readonly ITM_CONF="$SCRIPT_DIR/inversetonemapping.conf"
 readonly WALLPAPER_KWINRULE="$SCRIPT_DIR/wallpaper.kwinrule"
-readonly INSTALL_NAME="hdr"
-readonly INSTALL_DIR="$HOME/.local/bin"
-readonly LOG_FILE="$(xdg-user-dir VIDEOS)/playhistory.log"
+readonly INSTALL_NAME="hdr" # what to type in terminal
+readonly INSTALL_DIR="$HOME/.local/bin" # somewhere in $PATH
 readonly SOCKET="/tmp/wallpapermpvsocket"
-if ! tty --quiet; then
-	#|log stdout/err when there is no terminal
-	#|like from startup, shortcut, krunner
-	exec > >(tee "$LOG_FILE") 2>&1
-fi
 if ! command -v mpv >/dev/null; then
 	printf "The program \e[1mmpv\e[0m was not found in \$PATH!
 If it is installed as a flatpak, you need
@@ -63,6 +58,7 @@ modify the current instance instead of creating a new one.
 These options are used only on initialization of a new instance.
 
     -l, --loop      Loop media indefinitely until SKIP is called.
+    -t, --toast     Show a short toast of the filename in the background.
     --no-config     Alias for mpv option, do not use personal config.
     --only-images   Ignore videos when looking for media files.
     --only-videos   Ignore images when looking for media files.
@@ -83,7 +79,7 @@ These options require a value and are only passed on a new instance.
       =alphabetical     Play in order based on basename of all media files
       =newest           Play files in order of the date last moved
       =none             Play in whatever order supplied by the find command
-    -i, --itm ?= all
+    --itm ?= all
     Choose what type of SDR media inverse tone mapping upto HDR is applied to.
       =all             Use bt.2446a for images and videos. Set target-peak!
       =only-images     Use bt.2446a for images only. Videos unchanged
@@ -198,6 +194,7 @@ if [[ -v 1 ]]; then
 		shift
 	fi
 fi
+
 #|modular option parser
 #|fun learning exercise :)
 #|would be in a separate file if this was a larger script
@@ -206,10 +203,6 @@ declare -A FLAGS=()
 declare -A OPTARG_MAP=()
 declare -a POSITIONALS=()
 function parseoptions {
-	# quit if getopt throws an error with nowhere to log it
-	[[ "$?" != 0  ]] && ! tty --quiet && throw "Argument error!" \
-	"Invalid argument was supplied without a terminal!"
-
 	local GETOPT="$1"
 	#|I have not found a practical use for new lines here,
 	#|so for now it is cleaner and more secure to ban them
@@ -276,24 +269,50 @@ function parseoptions {
 		POSITIONALS+=("$value")
 	done < <(grep -Pob -- "X+(?!.*? --(?:$| ))" <<< "$sanitized")
 }
-readonly SHORTOPTIONS="hls:i:"
+readonly SHORTOPTIONS="hlts:"
 readonly LONGOPTIONS=\
-"help,loop,no-config,only-images,only-videos,sort:,itm:"
-parseoptions "$(getopt -o "$SHORTOPTIONS" -l "$LONGOPTIONS" -- "$@")"
-# declare -p FLAGS
-# declare -p OPTARG_MAP
-# declare -p POSITIONALS
-
+"help,loop,toast,no-config,only-images,only-videos,sort:,itm:"
+raw_getopt="$(getopt -o "$SHORTOPTIONS" -l "$LONGOPTIONS" -- "$@")"
+if [[ $? != 0 ]] && ! tty --quiet; then
+	throw "Option Error!" "Invalid parameters, run in terminal!"
+fi
+parseoptions "$raw_getopt"
 
 function isflagpresent {
 	local longhand="$1"
 	local shorthand="${2:-}"
 	[[ -v FLAGS["--$longhand"] || -v FLAGS["-$shorthand"] ]]
 }
+function getOPTARG {
+	local longhand="$1"
+	local regex="$2"
+	local shorthand="${3:-}"
+	local optvalue="${OPTARG_MAP["--$longhand"]:-}"
+	if [[ -z "$optvalue" && -n "$shorthand" ]]; then
+		if (( ${#shorthand} == 1 )); then
+			optvalue="${OPTARG_MAP["-$shorthand"]:-}"
+		else
+			optvalue="${OPTARG_MAP["--$shorthand"]:-}"
+		fi
+	fi
+	if [[ -z "$optvalue" ]]; then
+		echo ""
+		return 0
+	fi
+	optvalue="${optvalue,,}"
+	if ! grep -Pq "$regex" <<< "$optvalue"; then
+		throw "Argument error!" \
+		"Invalid --$longhand! $optvalue"
+	fi
+	echo "$optvalue"
+}
 if isflagpresent help h; then
 	helptext
 	exit 0
 fi
+
+declare -a preset_options=()
+unset FORCE_LOOP DO_TOAST ONLY_IMAGES ONLY_VIDEOS sort_method
 if [[ -v subcommand ]]; then
 	case "$subcommand" in
 		help|h)
@@ -302,7 +321,6 @@ if [[ -v subcommand ]]; then
 		quit|q)
 			if pkill -f "mpv --title=wallpaper-mpv"; then
 				rm -f "$SOCKET"
-				rm -f "$MEDIA_SYMLINK"
 				exit 0
 			fi
 			throw "Error Quitting Script" \
@@ -346,59 +364,45 @@ if [[ -v subcommand ]]; then
 	esac
 	exit 0
 fi
-declare -a preset_options=()
-unset FORCE_LOOP ONLY_IMAGES ONLY_VIDEOS
-if isflagpresent loop l; then
-	preset_options+=("--loop=inf --image-display-duration=inf")
-	readonly FORCE_LOOP=0
+if [[ ${#FLAGS[@]} -ne 0 ]]; then
+	if isflagpresent loop l; then
+		preset_options+=("--loop=inf --image-display-duration=inf")
+		readonly FORCE_LOOP=0
+	fi
+	if isflagpresent toast t; then
+		readonly DO_TOAST=0
+	fi
+	if isflagpresent no-config; then
+		preset_options+=("--no-config")
+	fi
+	if isflagpresent only-images; then
+		readonly ONLY_IMAGES=0
+	fi
+	if isflagpresent only-videos; then
+		readonly ONLY_VIDEOS=0
+	fi
 fi
-if isflagpresent no-config; then
-	preset_options+=("--no-config")
-fi
-if isflagpresent only-images; then
-	readonly ONLY_IMAGES=0
-fi
-if isflagpresent only-videos; then
-	readonly ONLY_VIDEOS=0
-fi
+sort_method="$(
+	getOPTARG sort "proportional|random|randarg|alphabetical|newest|none" s
+)"
+sort_method="${sort_method:-proportional}"
 if [[ ! -v POSITIONALS ]]; then
 	POSITIONALS=("${DEFAULT_PATHS[@]}")
 fi
-function getOPTARG {
-	local longhand="$1"
-	local regex="$2"
-	local shorthand="${3:-}"
-	local optvalue="${OPTARG_MAP["--$longhand"]:-}"
-	if [[ -z "$optvalue" && -n "$shorthand" ]]; then
-		optvalue="${OPTARG_MAP["-$shorthand"]:-}"
-	fi
-	if [[ -z "$optvalue" ]]; then
-		echo ""
-		return 0
-	fi
-	optvalue="${optvalue,,}"
-	if ! grep -Pq "$regex" <<< "$optvalue"; then
-		throw "Argument error!" \
-		"Invalid --$longhand! $optvalue"
-	fi
-	echo "$optvalue"
-}
-SORT_METHOD="$(
-	getOPTARG sort "proportional|random|randarg|alphabetical|newest|none" s
-)"
-SORT_METHOD="${SORT_METHOD:-proportional}"
 
 
+# put all media in one array regardless of relative location
 declare -a WALLPAPER_PATHS=()
 declare -A IMAGE_MAP=()
 declare -A VIDEO_MAP=()
 while read -r -d $'\0' path; do
 	mime_type="$(file -b --mime-type "$path")"
-	if [[ "$path" == *$'\n'* &&
+	if [[ "$path" == *@($'\n'|$'\r'|$'\b'|$'\f')* &&
 		( "$mime_type" == image/* || "$mime_type" == video/*)
 	]]; then
-		# would mess up coproc IPC because it's newline delimited
-		throw "Newline Error" "$path"
+		#|would mess up coproc IPC because it's newline delimited
+		#|also just weird and useless
+		throw "Newline/Escape Character Error" "$path"
 	fi
 	case "$mime_type" in
 		image/*)
@@ -418,8 +422,17 @@ unset mime_type
 if [[ ! -v WALLPAPER_PATHS ]]; then
 	throw "Argument Error" "No valid media paths supplied!"
 fi
+if [[ "$sort_method" == proportional && ${#VIDEO_MAP[@]} -eq 0 ]]; then
+	#|if there are no videos then there is
+	#|no point in finding relative duration
+	sort_method=random
+fi
 
 unset AVERAGE_DURATION
+#|complex, asynchronously calls and aggregates
+#|ffprobe on every video; currently just used
+#|to find the average video duration
+#|and normalized inverse distribution
 function probepositionals {
 	coproc RELAY {
 		while read line; do
@@ -452,6 +465,8 @@ function probepositionals {
 
 		path="${response% $duration}"
 		WALLPAPER_PATHS+=("$path")
+		#|its not done yet it needs to be normalized
+		#|which is done in the next loop
 		VIDEO_MAP["$path"]="$inverse_weight"
 		if (( --videos_remaining == 0 )); then
 			local SUCCESS=0
@@ -462,10 +477,11 @@ function probepositionals {
 		throw "Timeout error" "ffprobe failed! check terminal or try --sort=random"
 	fi
 	local probability
+	local normalized_weight
 	for path in "${!VIDEO_MAP[@]}"; do
-		inverse_weight="${VIDEO_MAP["$path"]}"
+		normalized_weight="${VIDEO_MAP["$path"]}"
 		probability="$(
-			awk "BEGIN{print $inverse_weight/$total_weight}"
+			awk "BEGIN{print $normalized_weight/$total_weight}"
 		)"
 		VIDEO_MAP["$path"]="$probability"
 	done
@@ -485,12 +501,17 @@ function probevideo {
 }
 
 function pickpickcarrotmethod {
-	case "$SORT_METHOD" in
+	case "$sort_method" in
 		proportional) echo "$(pickproportional)";;
 		random) echo "$(pickrandom)";;
 	esac
 }
+#|uses average duration
+#|or user set -i
 function pickproportional {
+	#|by assuming image weight
+	#|is just the average you dont actually
+	#|need to do math with their duration at all
 	if awk "BEGIN{
 		IMAGE_TOTAL = ${#IMAGE_MAP[@]}
 		if (${#IMAGE_MAP[@]} == 0) exit 1;
@@ -526,14 +547,11 @@ function pickrandom {
 	local -i random=$(shuf -n 1 -i 0-$RANGE)
 	echo "${WALLPAPER_PATHS[$random]}"
 }
-if [[ "$SORT_METHOD" == proportional && ${#VIDEO_MAP[@]} -eq 0 ]]; then
-	# no videos so dont worry about probing them
-	SORT_METHOD=random
-fi
-case "$SORT_METHOD" in
+
+case "$sort_method" in
 	proportional)
 		probepositionals
-		if [[ ${#IMAGE_MAP[@]} -ne 0 && ! -v FORCE_LOOP ]]; then
+		if [[ ! -v FORCE_LOOP && ${#IMAGE_MAP[@]} -ne 0 ]]; then
 			preset_options+=("--image-display-duration=$AVERAGE_DURATION")
 			printf "\e[34m%s\e[0m\n" \
 "Wallpapers from ${#IMAGE_MAP[@]} static image files will play for
@@ -541,11 +559,13 @@ $AVERAGE_DURATION seconds on average, the mean of ${#VIDEO_MAP[@]} videos passed
 		fi
 	;;
 	random)
+		printf "\e[34m%s\e[0m\n" \
+"Wallpapers will be randomly played from ${#IMAGE_MAP[@]} images and ${#VIDEO_MAP[@]} videos passed."
 		declare -ir RANGE=(${#WALLPAPER_PATHS[@]}-1)
 		declare -i last_index=-1
 		declare -i random #shuf -n 1 -i 0-$RANGE
 	;;
-	*) throw "unimplemented" "$SORT_METHOD";;
+	*) throw "unimplemented --sort" "$sort_method";;
 esac
 if [[ -v FORCE_LOOP ]]; then
 	printf "\e[34m%s\e[0m\n" \
@@ -553,10 +573,7 @@ if [[ -v FORCE_LOOP ]]; then
 indefinitely until SKIP is called!"
 fi
 
-
-last_symlink=""
 function cleanup {
-	rm -f "$last_symlink"
 	rm -f "$SOCKET"
 	pkill -f "mpv --title=wallpaper-mpv" || true
 	# make cursor visible after mpv messes with it
@@ -573,7 +590,7 @@ mpv --title=wallpaper-mpv --input-ipc-server="$SOCKET" \
 if ! waitsocket "$SOCKET"; then
 	throw "Socket error" "MPV's socket failed to open!"
 fi
-case "$(getOPTARG itm "all|image|video|none" i)" in
+case "$(getOPTARG itm "all|image|video|none")" in
 	all);; # dont disable anything
 	*image*|*none*)
 		socat - "$SOCKET" <<< \
@@ -594,26 +611,29 @@ coproc IPC { socat UNIX-CONNECT:"$SOCKET" - ; }
 #|with REPEAT, LOOP, or --drag-and-drop=append
 echo '{command=["observe_property",1,"playlist-pos"]}' >&${IPC[1]}
 
-
+function escapejson {
+	#|avoids jq dependency, completely valid here
+	#|for file paths where \n\r\b\f are banned
+	local arbitrary="$1"
+	arbitrary="${arbitrary//\\/\\\\}" # backslashes
+	arbitrary="${arbitrary//\"/\\\"}"
+	echo "$arbitrary"
+}
 # https://mpv.io/manual/master/#list-of-input-commands
 # https://mpv.io/manual/master/#json-ipc
+declare -ir TOAST_TIME=5000
 function plaympv {
-	echo "$(basename $1)"
 	local wallpaper="$1"
-	# use symlink to avoid json parsing/jq dependency
-	rm -f "$last_symlink"
-	local readable_symlink="Wallpaper:  $(
-		grep -Po "[\w .,:;?!&*-]+" <<<\
-		"$(basename "$wallpaper")" | paste -s -d ""
-	)"
-	echo "$readable_symlink"
-	last_symlink="$readable_symlink"
-	ln -sr "$wallpaper" "$readable_symlink"
+	local escaped="$(escapejson "$wallpaper")"
+	echo "{command=[\"loadfile\",\"$escaped\"]}" >&${IPC[1]}
 	printf "\e[36m%s\e[0m\n" "MPV is playing ${wallpaper/#"$HOME"/"~"}"
-	echo "{command=[\"loadfile\",\"$readable_symlink\"]}" >&${IPC[1]}
+	if [[ -v DO_TOAST ]]; then
+		echo "{command=[\"show-text\"\
+		,\"${escaped/#"$HOME"/"~"}\",$TOAST_TIME]}">&${IPC[1]}
+	fi
 }
 declare -a path_history=()
-declare -i HISTORY_LENGTH=6
+declare -ir HISTORY_LENGTH=6
 while read -r event <&${IPC[0]}; do
 	# use simple matching to avoid jq dependency
 	case "$event" in
