@@ -22,9 +22,9 @@ function parseoptions {
 		sanitized="${sanitized/"$quote"/"$redaction"}"
 	done < <(grep -Po "'.*?'(?!\\\'')" <<< "$GETOPT")
 
-	local SHORTLONG=$(grep -Po -- "^.*?(?= --(?:$| X))" <<< "$sanitized")
-
-	if grep -Pq -- " (-+[a-z-]+).*\1" <<< "$SHORTLONG"; then
+	local SHORTLONG="$(grep -Po -- "^.*?(?= --(?:$| X))" <<< "$sanitized")"
+# 	echo "sadferg  $SHORTLONG"
+	if grep -Pq -- " (-++[a-z-]+).*\1" <<< "$SHORTLONG"; then
 		return 1
 	fi
 
