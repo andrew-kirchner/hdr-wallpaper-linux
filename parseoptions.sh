@@ -9,6 +9,7 @@ function parseoptions {
 	#|you can still put newlines inbetween your flags and
 	#|stuff to format them as getopt cleans it
 	if [[ "$GETOPT" == *$'\n'* ]]; then
+		echo "No newlines in options!">&2
 		return 1
 	fi
 
@@ -23,8 +24,8 @@ function parseoptions {
 	done < <(grep -Po "'.*?'(?!\\\'')" <<< "$GETOPT")
 
 	local SHORTLONG="$(grep -Po -- "^.*?(?= --(?:$| X))" <<< "$sanitized")"
-# 	echo "sadferg  $SHORTLONG"
 	if grep -Pq -- " (-++[a-z-]+).*\1" <<< "$SHORTLONG"; then
+		echo "Duplicate Options! $SHORTLONG">&2
 		return 1
 	fi
 

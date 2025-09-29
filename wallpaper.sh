@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
+# set -x # to see everything
 set -euo pipefail
-# set -x to see everything
 shopt -s extglob
 
 readonly SCRIPT_PATH="$(readlink -f "$0")"
@@ -15,7 +15,7 @@ readonly WALLPAPER_KWINRULE="$SCRIPT_DIR/wallpaper.kwinrule"
 declare -a DEFAULT_PATHS=("$(xdg-user-dir PICTURES)" "$(xdg-user-dir VIDEOS)")
 readonly INSTALL_NAME="hdr" # what to type in terminal
 readonly INSTALL_DIR="$HOME/.local/bin" # somewhere in $PATH
-readonly SOCKET="/tmp/wallpapermpvsocket"
+readonly SOCKET="/tmp/wpmpvsocket"
 if ! command -v mpv >/dev/null; then
 	printf "The program \e[1mmpv\e[0m was not found in \$PATH!
 If it is installed as a flatpak, you need
@@ -124,8 +124,8 @@ function rand {
 
 applykdewindowrule "$WALLPAPER_KWINRULE"
 
-# BEGIN
-SUBCOMMANDS="HELP,H,QUIT,Q,SKIP,S,REPEAT,R,OSD,O,AUDIO,A,ITM,I"
+# BEGIN command line arguments
+SUBCOMMANDS="HELP,H,QUIT,Q,SKIP,S,REPEAT,R,OSD,O,AUDIO,A,ITM,I,DEBUG,D"
 unset subcommand
 if [[ -v 1 ]]; then
 	if [[ ",$SUBCOMMANDS," == *",${1^^},"* ]]; then
@@ -152,7 +152,7 @@ if isflagpresent help h; then
 fi
 
 declare -a preset_options=()
-unset FORCE_LOOP DO_TOAST ONLY_IMAGES ONLY_VIDEOS sort_method
+unset FORCE_LOOP DO_TOAST ONLY_IMAGES ONLY_VIDEOS sort_method itm
 if [[ -v subcommand ]]; then
 	case "$subcommand" in
 		help|h)
@@ -190,20 +190,29 @@ if [[ -v subcommand ]]; then
 			'{command=["set_property","audio","auto"]}'
 		;;
 		itm|i)
-			#|the user-data property cant be used because
-			#|the profile-restore functionality just breaks
-			#|for target-prim you can try bt.709
-			#|instead of auto which is maybe oversaturated p3
+			noimage="$(socat - "$SOCKET" <<< \
+				'{command=["get_property","user-data/noimage"]}'
+			)"
+			novideo="$(socat - "$SOCKET" <<< \
+				'{command=["get_property","user-data/novideo"]}'
+			)"
+			invert=$([[ "$noimage" == *true* ]] || printf true)
+			noimage=${invert:-false}
+			invert=$([[ "$novideo" == *true* ]] || printf true)
+			novideo=${invert:-false}
 			socat - "$SOCKET" <<< \
-			'{command=["cycle-values","target-prim","auto","bt.2020"]}'
+			"{command=[\"set_property\",\"user-data/noimage\",$noimage]}"
 			socat - "$SOCKET" <<< \
-			'{command=["cycle-values","target-trc","auto","pq"]}'
+			"{command=[\"set_property\",\"user-data/novideo\",$novideo]}"
+		;;
+		debug|d)
 			socat - "$SOCKET" <<< \
-			'{command=["cycle-values","inverse-tone-mapping","yes","no"]}'
+			'{command=["script-binding","stats/display-stats-toggle"]}'
 		;;
 	esac
 	exit 0
 fi
+
 if [[ ${#FLAGS[@]} -ne 0 ]]; then
 	if isflagpresent loop l; then
 		preset_options+=("--loop=inf --image-display-duration=inf")
@@ -226,12 +235,13 @@ sort_method="$(
 	getOPTARG sort "proportional|random|randarg|alphabetical|newest|none" s
 )"
 sort_method="${sort_method:-proportional}"
+itm="$(getOPTARG itm "all|image|video|none")"
 if [[ ! -v POSITIONALS ]]; then
 	POSITIONALS=("${DEFAULT_PATHS[@]}")
 fi
 # END
 
-# BEGIN
+# BEGIN find media files
 # put all media in one array regardless of relative location
 declare -a WALLPAPER_PATHS=()
 declare -A IMAGE_MAP=()
@@ -445,7 +455,7 @@ $AVERAGE_DURATION seconds on average, the mean of ${#VIDEO_MAP[@]} videos passed
 	*) throw "unimplemented --sort" "$sort_method";;
 esac
 
-# BEGIN
+# BEGIN run mpv
 function cleanup {
 	rm -f "$SOCKET"
 	pkill -f "mpv --title=wallpaper-mpv" || true
@@ -460,7 +470,17 @@ mpv --title=wallpaper-mpv --input-ipc-server="$SOCKET" \
 if ! waitsocket "$SOCKET"; then
 	throw "Socket error" "MPV's socket failed to open!"
 fi
-case "$(getOPTARG itm "all|image|video|none")" in
+#|open one socat instance that sends and receives
+#|messages with its own file descriptors; compare to
+#|socat pty,raw,echo=0,link="$SOCAT_PTY" UNIX-CONNECT:"$SOCKET" &
+#|waitpath... exec 3<>"$SOCAT_PTY"
+coproc IPC { socat UNIX-CONNECT:"$SOCKET" - ; }
+#|use to detect no more media files to play
+#|accounts for when more files are queued like
+#|with REPEAT, LOOP, or --drag-and-drop=append
+echo '{command=["observe_property",1,"playlist-pos"]}' >&${IPC[1]}
+
+case "$itm" in
 	all);; # dont disable anything
 	*image*|*none*)
 		socat - "$SOCKET" <<< \
@@ -471,15 +491,6 @@ case "$(getOPTARG itm "all|image|video|none")" in
 		'{command=["set_property","user-data/noimage",true]}'
 	;;
 esac
-#|open one socat instance that sends and receives
-#|messages with its own file descriptors; compare to
-#|socat pty,raw,echo=0,link="$SOCAT_PTY" UNIX-CONNECT:"$SOCKET" &
-#|waitpath... exec 3<>"$SOCAT_PTY"
-coproc IPC { socat UNIX-CONNECT:"$SOCKET" - ; }
-#|use to detect no more media files to play
-#|accounts for when more files are queued like
-#|with REPEAT, LOOP, or --drag-and-drop=append
-echo '{command=["observe_property",1,"playlist-pos"]}' >&${IPC[1]}
 # END
 
 function escapejson {
