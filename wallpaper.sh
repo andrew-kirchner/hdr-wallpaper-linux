@@ -8,7 +8,6 @@ readonly SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 source "$SCRIPT_DIR/applykdewindowrule.sh"
 source "$SCRIPT_DIR/parseoptions.sh"
 readonly MPV_CONF="$SCRIPT_DIR/mpv.conf"
-readonly ITM_CONF="$SCRIPT_DIR/inversetonemapping.conf"
 readonly WALLPAPER_KWINRULE="$SCRIPT_DIR/wallpaper.kwinrule"
 
 
@@ -59,6 +58,7 @@ modify the current instance instead of creating a new one.
               is not just muted but disabled by default!
     ITM     Toggle inverse tone mapping for SDR media.
               Test the differnece for both images and videos!\e[035m
+    DEBUG   Toggle the \"Stats for nerds\" display showing HDR information!
 ==|==========================================================================|==
 \e[0mBoolean Flags [ -m --mode ] ?= false
 These options are used only on initialization of a new instance.
@@ -302,6 +302,7 @@ function probepositionals {
 	local duration
 	local -i path_index
 	local total_duration="0.0"
+	printf "Waiting on duration ffprobe of ${#VIDEO_MAP[@]} videos...\n"
 	while read -t 5 response <&"${RELAY[0]}"; do
 		# coproc sends in format "index duration"
 		duration="$(grep -Po "[\d.]+$" <<< "$response")"
@@ -345,15 +346,17 @@ function probevideo {
 	printf "$index $duration\n" >&3
 }
 
-function weighvideos {
+function inversenormalizeprobabilities {
+	# [[path, duration]]
+	local -n MAP="$1"
 	local duration
 	local awk_durations=""
 	#|abstract weird path string away
 	#|from awk so there can be just 1 awk call
-	declare -a ordered_videos=()
-	for video in "${!VIDEO_MAP[@]}"; do
-		ordered_videos+=("$video")
-		duration="${VIDEO_MAP["$video"]}"
+	declare -a ordered_media=()
+	for media in "${!MAP[@]}"; do
+		ordered_media+=("$media")
+		duration="${MAP["$media"]}"
 		awk_durations+=$duration+$'\n'
 	done
 	local normalized_weights="$(awk '
@@ -373,7 +376,7 @@ function weighvideos {
 	' <<< "${awk_durations%$'\n'}")"
 	local -i index=0
 	while read normalized; do
-		VIDEO_MAP["${ordered_videos[$index]}"]="$normalized"
+		MAP["${ordered_media[$index]}"]="$normalized"
 		index=$((index + 1))
 	done <<< "$normalized_weights"
 }
@@ -403,7 +406,7 @@ function pickproportional {
 		local -i random_image=$(shuf -n 1 -i 1-${#IMAGE_MAP[@]})
 		local -i key_index=0
 		for path in "${!IMAGE_MAP[@]}"; do
-			if (( ++key_index == $random_image )); then
+			if (( ++key_index == random_image )); then
 				echo "$path"
 				return 0
 			fi
@@ -437,7 +440,7 @@ fi
 case "$sort_method" in
 	proportional)
 		probepositionals
-		weighvideos
+		inversenormalizeprobabilities VIDEO_MAP
 		if [[ ! -v FORCE_LOOP && ${#IMAGE_MAP[@]} -ne 0 ]]; then
 			preset_options+=("--image-display-duration=$AVERAGE_DURATION")
 			printf "\e[34m%s\e[0m\n" \
@@ -449,7 +452,6 @@ $AVERAGE_DURATION seconds on average, the mean of ${#VIDEO_MAP[@]} videos passed
 		printf "\e[34m%s\e[0m\n" \
 "Wallpapers will be randomly played from ${#IMAGE_MAP[@]} images and ${#VIDEO_MAP[@]} videos passed."
 		declare -ir RANGE=(${#WALLPAPER_PATHS[@]}-1)
-		declare -i last_index=-1
 		declare -i random #shuf -n 1 -i 0-$RANGE
 	;;
 	*) throw "unimplemented --sort" "$sort_method";;
@@ -478,7 +480,8 @@ coproc IPC { socat UNIX-CONNECT:"$SOCKET" - ; }
 #|use to detect no more media files to play
 #|accounts for when more files are queued like
 #|with REPEAT, LOOP, or --drag-and-drop=append
-echo '{command=["observe_property",1,"playlist-pos"]}' >&${IPC[1]}
+echo '{command=["observe_property",0,"playlist-pos"]}' >&${IPC[1]}
+# echo '{command=["observe_property",0,"frame-drop-count"]}' >&${IPC[1]}
 
 case "$itm" in
 	all);; # dont disable anything
