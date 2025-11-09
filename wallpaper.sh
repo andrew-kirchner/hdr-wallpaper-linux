@@ -232,10 +232,12 @@ if [[ ${#FLAGS[@]} -ne 0 ]]; then
 	fi
 fi
 sort_method="$(
-	getOPTARG sort "proportional|random|randarg|alphabetical|newest|none" s
+	getOPTARG "proportional|random|randarg|alphabetical|newest|none" sort s
 )"
 sort_method="${sort_method:-proportional}"
-itm="$(getOPTARG itm "all|image|video|none")"
+itm="$(getOPTARG "all|image|video|none" itm)"
+
+
 if [[ ! -v POSITIONALS ]]; then
 	POSITIONALS=("${DEFAULT_PATHS[@]}")
 fi

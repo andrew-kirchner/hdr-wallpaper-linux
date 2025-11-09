@@ -104,3 +104,30 @@ function getOPTARG {
 	fi
 	echo "$optvalue"
 }
+
+function getOPTARG {
+	local regex="$1"
+	shift
+	local optvalue=""
+	for flagalias in "$@"; do
+		flagalias="${flagalias##*(-)}"
+		if (( ${#flagalias} == 1 )); then
+			optvalue="${OPTARG_MAP["-$flagalias"]:-}"
+		else
+			optvalue="${OPTARG_MAP["--$flagalias"]:-}"
+		fi
+		if [[ -n "$optvalue" ]]; then
+			break
+		fi
+	done
+	if [[ -z "$optvalue" ]]; then
+		# not an error, just no input
+		echo ""
+		return 0
+	fi
+	optvalue="${optvalue,,}"
+	if ! grep -Pq "$regex" <<< "$optvalue"; then
+		return 1
+	fi
+	echo "$optvalue"
+}
