@@ -71,9 +71,16 @@ function parseoptions {
 	done < <(grep -Pob -- "X+(?!.*? --(?:$| ))" <<< "$sanitized")
 }
 function isflagpresent {
-	local longhand="$1"
-	local shorthand="${2:-}"
-	[[ -v FLAGS["--$longhand"] || -v FLAGS["-$shorthand"] ]]
+	local flagalias
+	for flagalias in "$@"; do
+		flagalias="${flagalias##*(-)}"
+		if [[ ${#flagalias} -eq 1 && -v FLAGS["-$flagalias"] ]]; then
+			return 0
+		elif [[ -v FLAGS["--$flagalias"] ]]; then
+			return 0
+		fi
+	done
+	return 1
 }
 function getOPTARG {
 	local longhand="$1"
